@@ -18,7 +18,7 @@
 
 ## 支持功能
 
-![便蹬宝工作区](docs/media/workspace.jpg)
+![便蹬宝工作区：项目分组、最后输入和上下文占用](docs/media/workspace-desktop.png)
 
 | 位置 | 能做什么 |
 | --- | --- |
@@ -35,17 +35,25 @@
 
 上下文占用来自 App 的可用状态，不是累计账单 token，也不保证逐 token 更新。模型和强度取决于当前 provider；手填模型 ID 不会让不可用的模型变可用。
 
-| 线程内 | 新建线程 |
-| --- | --- |
-| ![线程阅读与上下文](docs/media/thread.jpg) | ![选择项目、模型与推理强度](docs/media/create.jpg) |
+**手机工作区**
+
+<img src="docs/media/workspace-mobile.png" width="390" alt="手机工作区：项目折叠、线程搜索和最后输入预览">
+
+**新建线程**
+
+<img src="docs/media/create.png" width="390" alt="新建线程：选择项目、模型 ID、推理强度和首条消息">
+
+**线程内**
+
+<img src="docs/media/thread.png" width="390" alt="线程阅读：最终回复、轮次跳转和上下文占用">
 
 ### 看一眼怎么用
 
-以下均为**虚拟项目、合成聊天和模拟执行结果**：展示真实网页交互，不使用私人聊天，不代表真实模型执行验收。点击动图可下载完整 MP4。
+以下均为**虚拟项目、合成聊天和模拟执行结果**：展示真实网页交互，不使用私人聊天，不代表真实模型执行验收。视频为 780 × 1740、25 fps 的连续录制，无配音；点击链接打开或下载完整 MP4。
 
-| 工作区与搜索 | 创建与模型选择 | 线程阅读与上下文 |
-| --- | --- | --- |
-| [![工作区演示](docs/media/workspace.gif)](https://github.com/Yuimi-chaya/biandengbao/releases/download/v0.1.0/workspace.mp4) | [![新建线程演示](docs/media/create.gif)](https://github.com/Yuimi-chaya/biandengbao/releases/download/v0.1.0/create.mp4) | [![线程交互演示](docs/media/thread.gif)](https://github.com/Yuimi-chaya/biandengbao/releases/download/v0.1.0/thread.mp4) |
+- [工作区与搜索 · 20 秒](https://github.com/Yuimi-chaya/biandengbao/releases/download/v0.1.0/workspace.mp4)：项目展开/收起、搜索、切换最近交互与项目分组。
+- [新建线程 · 26 秒](https://github.com/Yuimi-chaya/biandengbao/releases/download/v0.1.0/create.mp4)：选择项目、自定义模型 ID、推理强度，填写需求并模拟创建。
+- [线程阅读与上下文 · 19 秒](https://github.com/Yuimi-chaya/biandengbao/releases/download/v0.1.0/thread.mp4)：展开思考摘要与工具输出、轮次跳转、模拟压缩上下文。
 
 ## 安装使用
 
