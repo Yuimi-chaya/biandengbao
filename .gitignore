@@ -1,0 +1,16 @@
+# 本机运行数据、登录凭据、聊天快照与下载的外部程序
+.local/
+.tmp/
+.env
+.env.*
+!.env.example
+
+# Python 和系统文件
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# 本地开发记录，不作为项目文档发布
+/task_plan.md
+/findings.md
+/progress.md

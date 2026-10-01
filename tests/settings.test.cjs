@@ -1,0 +1,13 @@
+const assert = require('node:assert/strict');
+const { efforts } = require('../web/settings.js');
+const model = { efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'medium' };
+assert.deepEqual(efforts(model, 'high'), { values: model.efforts, value: 'high' });
+assert.equal(efforts(model, 'minimal').value, '');
+assert.equal(efforts(model, null).value, '');
+assert.equal(efforts(model, 'ultra', false).value, 'medium');
+assert.equal(efforts(model, null, false).value, 'medium');
+assert.equal(efforts(undefined, null).value, '');
+assert.equal(efforts(undefined, 'high').value, 'high');
+assert.equal(efforts({ efforts: ['low'], defaultEffort: 'minimal' }, null, false).value, 'low');
+assert.deepEqual(efforts({ efforts: ['high', 'high', 'bogus'] }, 'high').values, ['high']);
+console.log('9 model effort assertions passed');
