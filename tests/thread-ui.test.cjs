@@ -29,4 +29,32 @@ assert.equal(ui.settledPrefix('First\n\nsecond'), 7);
 assert.equal(ui.settledPrefix('```js\n\npending'), 0);
 assert.equal(ui.settledPrefix('````js\n```\n\npending'), 0);
 assert.equal(ui.settledPrefix('```js\nx\n```\n\npending'), 13);
-console.log('25 thread UI assertions passed');
+assert.equal(ui.inputMaxHeight(350, 180), 70);
+assert.equal(ui.inputMaxHeight(300, 210), 40);
+assert.equal(ui.inputMaxHeight(900, 180), 150);
+assert.equal(ui.diffLineKind('+++ b/app.js'), 'meta');
+assert.equal(ui.diffLineKind('--- a/app.js'), 'meta');
+assert.equal(ui.diffLineKind('+ added'), 'add');
+assert.equal(ui.diffLineKind('- removed'), 'remove');
+assert.equal(ui.diffLineKind('@@ -1 +1 @@'), 'hunk');
+assert.equal(ui.diffLineKind(' unchanged'), 'context');
+assert.equal(ui.diffLineKind('*** Update File: app.js'), 'meta');
+assert.equal(ui.activityPresentation({kind:'commandExecution',text:'npm test',output:'OK'}).call, 'npm test');
+assert.equal(ui.activityPresentation({kind:'dynamicToolCall',title:'exec_command',
+  text:'{"cmd":"npm test","workdir":"C:/demo","yield_time_ms":1000}'}).call, '目录：C:/demo\nnpm test');
+assert.equal(ui.activityPresentation({kind:'function_call',text:JSON.stringify({
+  name:'exec_command',arguments:'{"cmd":"node test.cjs"}'})}).call, 'node test.cjs');
+assert.equal(ui.activityPresentation({kind:'custom_tool_call',text:JSON.stringify({
+  name:'apply_patch',input:'*** Begin Patch\n*** Update File: app.js\n@@\n-old\n+new\n*** End Patch'})}).diff.includes('+new'), true);
+assert.equal(ui.activityPresentation({kind:'dynamicToolCall',title:'search',text:'{"query":"hello","path":"src"}'}).call, '搜索：hello\n范围：src');
+assert.equal(ui.activityPresentation({kind:'fileChange',text:'app.js\n@@ -1 +1 @@\n-old\n+new'}).diff.includes('-old'), true);
+assert.equal(ui.activityPresentation({kind:'mcpToolCall',title:'tool',text:'{"password":"private","schema":{"data":"hidden"},"path":"readme"}'}).call, '文件：readme');
+assert.equal(ui.activityPresentation({kind:'mcpToolCall',text:'{}',output:'[{"type":"text","text":"Readable output"}]'}).output, 'Readable output');
+assert.equal(ui.activityPresentation({kind:'mcpToolCall',text:'{incomplete'}).call, '正在接收调用信息…');
+assert.equal(ui.activityPresentation({kind:'dynamicToolCall',text:JSON.stringify({tool_uses:[
+  {recipient_name:'functions.exec_command',parameters:{cmd:'one'}},
+  {recipient_name:'functions.exec_command',parameters:{cmd:'two'}}]})}).call, 'one\n\ntwo');
+assert.equal(ui.activityPresentation({kind:'function_call_output',text:'{"output":"Done","call_id":"ignored"}'}).call, '调用结果');
+assert.equal(ui.activityPresentation({kind:'function_call_output',text:'{"output":"Done","call_id":"ignored"}'}).output, 'Done');
+assert.equal(ui.activityPresentation({kind:'custom_tool_call',text:'{"name":"tool","arguments":{}}'}).diff, '');
+console.log('48 thread UI assertions passed');

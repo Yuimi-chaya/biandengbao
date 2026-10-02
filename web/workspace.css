@@ -44,6 +44,12 @@ button, summary, a { touch-action: manipulation; }
 #back { display: inline-flex; }
 .chat, .timeline, .composer { min-height: 0; }
 .chat-head, .notice, .composer { flex-shrink: 0; }
+.chat-head { border-bottom: 1px solid var(--line); }
+.sidebar-head { border-bottom: 1px solid var(--line); margin-bottom: 12px; }
+.sidebar-foot { border-top: 1px solid var(--line); }
+.sessions, .app:not(.chat-open) .sessions { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.app .project-group > summary { border-bottom: 1px solid var(--line); background-clip: padding-box; }
+.chat-open aside { border-right: 1px solid var(--line); }
 .timeline { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; padding-right: max(38px, calc((100% - 760px) / 2)); }
 .turn { content-visibility: visible; contain-intrinsic-size: none; }
 .compaction-record .activity-heading { color: #738b7d; font-size: 11px; }
@@ -57,6 +63,15 @@ button, summary, a { touch-action: manipulation; }
 .composer textarea { min-height: 60px; padding: 12px 8px 8px; overflow-y: auto; }
 .compose-controls { flex: 1; }
 .compose-bottom { align-items: flex-end; }
+.compose-bottom { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+.compose-controls { flex-wrap: nowrap; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
+.compose-controls::-webkit-scrollbar { display: none; }
+.compose-controls > *, .compose-controls .composer-tools { flex: none; }
+.compose-controls .composer-tools { flex-wrap: nowrap; }
+.compose-actions { display: flex; align-items: center; }
+#send, #stop { width: 40px; height: 40px; flex: none; touch-action: manipulation; }
+#send:active { transform: none; }
+.input-measure { position: fixed; left: -10000px; top: 0; height: 0 !important; min-height: 0 !important; max-height: none !important; visibility: hidden; overflow: hidden; resize: none; pointer-events: none; }
 .composer-tools { flex-wrap: wrap; }
 .compose-bottom select { margin-left: 4px; }
 .compact-button { display: inline-flex; align-items: center; gap: 5px; background: transparent; border: 0; color: #666; font-size: 11px; padding: 8px 5px; min-height: 32px; }
@@ -74,11 +89,33 @@ button, summary, a { touch-action: manipulation; }
 .disclosure-chevron { margin-left: auto; width: 14px; height: 14px; transform: rotate(-90deg); flex: none; }
 .activity-group[open] > summary .disclosure-chevron, .turn-process[open] > summary .disclosure-chevron { transform: none; }
 .activity-group { margin: 5px 0; }
+.activity-group > .activity-heading { border-bottom: 1px solid var(--line); }
+.activity-body { padding: 5px 0; }
+.activity-body:focus-visible, .collapse-detail:focus-visible { outline: 2px solid #779584; outline-offset: 2px; }
+.activity-group .activity { border: 1px solid #dedede; border-radius: 6px; margin: 8px 0; overflow: hidden; }
+.activity > summary { padding: 8px 10px; background: #fafafa; }
+.activity[open] > summary { border-bottom: 1px solid var(--line); }
+.tool-title { min-width: 0; overflow-wrap: anywhere; }
+.tool-body { padding: 10px; cursor: pointer; }
+.tool-call, .tool-output { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.tool-output { color: #747474; margin-top: 10px; max-height: 320px; overflow: auto; overscroll-behavior: contain; }
+.tool-call .stream-tail, .tool-output .stream-tail, .reasoning-preview .stream-tail { font: inherit; }
+.tool-diff { margin-top: 10px; overflow-x: auto; overscroll-behavior: contain; font: 12px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace; tab-size: 4; }
+.diff-line { display: block; white-space: pre; min-height: 1.65em; width: max-content; min-width: 100%; padding: 0 8px; }
+.diff-line[data-kind=add] { color: #116329; background: #dafbe1; }
+.diff-line[data-kind=remove] { color: #82071e; background: #ffebe9; }
+.diff-line[data-kind=hunk] { color: #0550ae; background: #ddf4ff; }
+.diff-line[data-kind=meta] { color: #656d76; background: #f6f8fa; }
+.tool-success, .tool-failure { display: block; margin-top: 8px; font-size: 10px; }
+.tool-success { color: #35704a; }
+.tool-failure { color: #a33e43; }
 .reasoning-body { border-left: 2px solid #e5e5e5; padding: 4px 14px; margin: 6px 0 12px 7px; font-size: 12px; line-height: 1.7; color: #7b7b7b; }
+.reasoning-body { cursor: pointer; }
 .reasoning-title { color: #606060; font-weight: 500; }
 .reasoning-body .markdown > :first-child { margin-top: 6px; }
 .turn-process { margin: 12px 0 18px; }
 .turn-process > summary { display: flex; align-items: center; gap: 8px; list-style: none; font-size: 11px; min-height: 36px; cursor: pointer; color: #777; }
+.turn-process > summary { border-bottom: 1px solid var(--line); }
 .turn-process > summary::-webkit-details-marker { display: none; }
 .turn-process > summary svg { flex: none; color: #65947a; width: 15px; height: 15px; }
 .turn-time { font-size: 10px; color: #999; font-variant-numeric: tabular-nums; line-height: 1.5; }
@@ -137,6 +174,12 @@ button, summary, a { touch-action: manipulation; }
   .keyboard-open .compose-foot { display: none; }
   .keyboard-open .context-strip { min-height: 27px; margin-bottom: 2px; padding: 0; }
   .keyboard-open .composer { padding-bottom: 4px; }
+  .keyboard-open .composer textarea { min-height: 40px; }
+  .keyboard-open .skill-pills, .keyboard-open .attachment-pills { flex-wrap: nowrap; overflow-x: auto; max-height: 42px; }
+  .keyboard-open #send-error { max-height: 45px; overflow-y: auto; }
+  .keyboard-open .composer-tools .tool-button { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .keyboard-open .compose-bottom select { max-width: 125px; }
+  .keyboard-open .tool-button { max-width: 135px; }
   .attachment-pill > span { max-width: 120px; }
   .stop-actions > button { flex: 1; }
 }

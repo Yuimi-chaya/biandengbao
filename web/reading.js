@@ -1,10 +1,11 @@
 'use strict';
 const ReadingUI = (() => {
   const streams = new Map();
+  const rendered = new WeakMap();
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
   let timer = 0;
   function blocks(turn) {
-    return [...turn.querySelectorAll('.markdown:not(.stream-tail) > *, .stream-tail, .activity-heading, .turn-process > summary')];
+    return [...turn.querySelectorAll('.markdown:not(.stream-tail) > *, .stream-tail, .activity-heading, .activity > summary, .diff-line, .tool-call, .tool-output, .turn-process > summary')];
   }
   function capture(initial = false) {
     const timeline = document.getElementById('timeline'), top = timeline.getBoundingClientRect().top;
@@ -49,7 +50,31 @@ const ReadingUI = (() => {
   }
   function paint(entry, done = false) {
     const text = entry.target.slice(0, entry.visible);
+    rendered.set(entry.node, { text, format: entry.format });
+    if (entry.format === 'diff') {
+      const lines = text.split('\n');
+      for (let index = Math.max(0, (entry.diffLineCount || 0) - 1); index < lines.length; index++) {
+        let line = entry.node.children[index];
+        if (!line) {
+          line = document.createElement('span');
+          line.className = done ? 'diff-line' : 'diff-line stream-chunk';
+          entry.node.append(line);
+        }
+        if (line.textContent !== lines[index]) line.textContent = lines[index];
+        const kind = ThreadUI.diffLineKind(lines[index]);
+        if (line.dataset.kind !== kind) line.dataset.kind = kind;
+      }
+      entry.diffLineCount = lines.length;
+      while (entry.node.children.length > lines.length) entry.node.lastChild.remove();
+      if (done) streams.delete(entry.key);
+      return;
+    }
     if (done) {
+      if (entry.format === 'plain') {
+        entry.node.replaceChildren(document.createTextNode(entry.target));
+        streams.delete(entry.key);
+        return;
+      }
       entry.node.querySelectorAll('pre code').forEach(code => BridgeUI.unobserveCode(code));
       entry.node.querySelector('.stream-prefix')?.remove();
       entry.node.querySelector('.stream-tail')?.remove();
@@ -66,7 +91,7 @@ const ReadingUI = (() => {
     }
     // Parse only completed blocks; token-sized updates stay cheap text appends.
     const now = performance.now();
-    const boundary = now - entry.checkedAt >= 400 ? ThreadUI.settledPrefix(text) : entry.committed;
+    const boundary = entry.format === 'plain' ? 0 : now - entry.checkedAt >= 400 ? ThreadUI.settledPrefix(text) : entry.committed;
     if (now - entry.checkedAt >= 400) entry.checkedAt = now;
     if (boundary > entry.committed && performance.now() - entry.parsedAt >= 400) {
       prefix.querySelectorAll('pre code').forEach(code => BridgeUI.unobserveCode(code));
@@ -103,18 +128,25 @@ const ReadingUI = (() => {
     restore(position);
     if ([...streams.values()].some(entry => entry.visible < entry.target.length)) timer = setTimeout(tick, 32);
   }
-  function update(key, node, text, complete, files, fileUrl, instant = false) {
+  function update(key, node, text, complete, files, fileUrl, instant = false, format = 'markdown') {
     let entry = streams.get(key);
+    let seeded = false;
     if (entry && !text.startsWith(entry.target)) { streams.delete(key); entry = null; node.replaceChildren(); }
     if (!entry) {
-      entry = { key, node, target: '', visible: 0, committed: 0, painted: 0, parsedAt: 0, checkedAt: 0, at: performance.now(), rate: 100 };
+      entry = { key, node, format, target: '', visible: 0, committed: 0, painted: 0, parsedAt: 0, checkedAt: 0, at: performance.now(), rate: 100 };
       streams.set(key, entry);
+      const previous = rendered.get(node);
+      if (previous?.format === format && text.startsWith(previous.text)) {
+        entry.visible = previous.text.length;
+        seeded = true;
+      }
+      node.replaceChildren();
       if (instant) entry.visible = text.length;
     }
     entry.node = node; entry.files = files; entry.fileUrl = fileUrl;
     if (entry.target !== text) entry.rate = Math.max(100, (text.length - entry.visible) / 1.2);
     entry.target = text; entry.complete = complete;
-    if (instant && !complete) mutate(() => paint(entry));
+    if ((instant || seeded) && entry.visible && !complete) mutate(() => paint(entry));
     if (complete && entry.visible >= text.length || reduced.matches) mutate(() => {
       entry.visible = text.length; paint(entry, true);
     });
@@ -122,6 +154,7 @@ const ReadingUI = (() => {
     return node;
   }
   function has(key) { return streams.has(key); }
+  function node(key) { return streams.get(key)?.node; }
   function prune() {
     for (const [key, entry] of streams) if (!entry.node.isConnected) streams.delete(key);
   }
@@ -129,5 +162,5 @@ const ReadingUI = (() => {
   document.addEventListener('visibilitychange', () => {
     if (document.hidden && streams.size) tick();
   });
-  return { capture, restore, mutate, update, has, prune, reset };
+  return { capture, restore, mutate, update, has, node, prune, reset };
 })();

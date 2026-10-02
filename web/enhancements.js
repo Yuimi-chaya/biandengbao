@@ -1,7 +1,8 @@
 'use strict';
 const BridgeUI = (() => {
   let app, creation, creating = false, contextTimer, summaryBusy = false, highlightObserver, rowObserver;
-  let turnObserver, navStamp='', viewportFrame=0, uploadCount=0, attachmentKey=null, inputStamp='';
+  let turnObserver, navStamp='', viewportFrame=0, uploadCount=0, attachmentKey=null, inputStamp='', inputFrame=0, inputMeasure;
+  let fullHeight=window.innerHeight, viewportStamp='';
   const uploadDrafts=new Map();
   const observedTurns=new Set();
   const visibleRows = new Set();
@@ -216,32 +217,86 @@ const BridgeUI = (() => {
     const visual = window.visualViewport;
     // Pinch zoom belongs to the browser, not the keyboard layout controller.
     if(visual&&Math.abs(visual.scale-1)>.02)return;
-    const height = visual?.height || window.innerHeight;
+    const height = Math.round(visual?.height || window.innerHeight);
     const shell=$('app'),timeline=$('timeline');
+    const focused=document.activeElement===$('message');
+    if(!focused)fullHeight=Math.max(fullHeight,window.innerHeight);
+    const keyboard=focused&&height<fullHeight-100;
+    const top=Math.round(visual?.offsetTop||0);
+    const stamp=height+'|'+top+'|'+keyboard;
+    if(stamp===viewportStamp)return;
+    viewportStamp=stamp;
     const position=ReadingUI.capture();
     shell.style.height=height+'px';
-    shell.style.top=(visual?.offsetTop||0)+'px';
+    shell.style.top=top+'px';
     document.documentElement.style.setProperty('--viewport-height',height+'px');
-    const keyboard=document.activeElement===$('message')&&(height<window.innerHeight-100||height<screen.height*.65);
     shell.classList.toggle('keyboard-open',keyboard);
-    if (document.activeElement === $('message') && height < window.innerHeight - 100) {
-      document.documentElement.style.setProperty('--keyboard-open', '1');
-    } else {
-      document.documentElement.style.setProperty('--keyboard-open', '0');
-    }
+    document.documentElement.style.setProperty('--keyboard-open',keyboard?'1':'0');
     resizeInput();
     ReadingUI.restore(position);
     latestButton();
     });
   }
   function resizeInput(){
-    const input=$('message'),max=Math.min(150,Math.max(52,($('app').clientHeight||window.innerHeight)*.20));
-    const stamp=currentKey()+'|'+max+'|'+input.value;
+    const input=$('message');
+    if(!$('app').classList.contains('chat-open'))return;
+    const height=$('app').clientHeight||window.innerHeight;
+    const chrome=document.querySelector('.chat-head').offsetHeight;
+    const extra=$('composer').offsetHeight-input.offsetHeight+$('notice').offsetHeight+chrome;
+    const max=ThreadUI.inputMaxHeight(height,extra),width=input.clientWidth;
+    const stamp=currentKey()+'|'+max+'|'+width+'|'+input.value;
     if(stamp===inputStamp)return;
     inputStamp=stamp;
-    input.style.height='auto';
-    input.style.height=Math.min(max,input.scrollHeight)+'px';
+    // Measure offscreen: collapsing the focused textarea makes mobile browsers move its caret.
+    if(!inputMeasure){
+      inputMeasure=document.createElement('textarea');
+      inputMeasure.className='input-measure';inputMeasure.tabIndex=-1;
+      inputMeasure.setAttribute('aria-hidden','true');inputMeasure.readOnly=true;
+      document.body.append(inputMeasure);
+    }
+    const style=getComputedStyle(input);
+    for(const property of ['font','lineHeight','padding','borderWidth','boxSizing','wordBreak','overflowWrap','letterSpacing']){
+      inputMeasure.style[property]=style[property];
+    }
+    inputMeasure.style.width=width+'px';inputMeasure.value=input.value;
+    const next=Math.min(max,Math.max(52,inputMeasure.scrollHeight));
+    if(Math.abs(input.getBoundingClientRect().height-next)>.5){
+      const position=ReadingUI.capture();
+      input.style.height=next+'px';
+      ReadingUI.restore(position);
+    }
     latestButton();
+  }
+  function scheduleInput(){
+    if(inputFrame)return;
+    inputFrame=requestAnimationFrame(()=>{inputFrame=0;resizeInput();});
+  }
+  function bindDisclosures(){
+    const timeline=$('timeline');
+    let start=null,moved=false;
+    timeline.addEventListener('pointerdown',event=>{start={x:event.clientX,y:event.clientY};moved=false;},{passive:true});
+    timeline.addEventListener('pointermove',event=>{
+      if(start&&Math.hypot(event.clientX-start.x,event.clientY-start.y)>8)moved=true;
+    },{passive:true});
+    timeline.addEventListener('pointercancel',()=>{moved=true;});
+    function collapse(event){
+      if(event.type==='keydown'&&!['Enter',' '].includes(event.key))return;
+      if(event.type==='click'&&moved)return;
+      const target=event.target;
+      if(target.closest('summary,button,a,input,textarea,select')||window.getSelection()?.toString())return;
+      const body=target.closest('.collapse-detail');
+      if(!body||event.type==='keydown'&&target!==body)return;
+      const detail=body.closest('details');
+      if(!detail?.open)return;
+      event.preventDefault();event.stopPropagation();
+      const top=detail.getBoundingClientRect().top;
+      detail.open=false;
+      timeline.scrollTop+=detail.getBoundingClientRect().top-top;
+      if(event.type==='keydown')detail.querySelector(':scope > summary')?.focus({preventScroll:true});
+      latestButton();
+    }
+    timeline.addEventListener('click',collapse);
+    timeline.addEventListener('keydown',collapse);
   }
   function currentKey(){const current=app.getCurrent();return current.host+'|'+current.id;}
   function attachments(){return (uploadDrafts.get(currentKey())||[]).map(file=>file.id);}
@@ -487,9 +542,14 @@ const BridgeUI = (() => {
     welcomeCreate.className = 'primary';
     welcomeCreate.append(document.createTextNode('新建线程'));
     $('welcome').append(welcomeCreate);
-    $('message').addEventListener('input', resizeInput);
+    $('message').addEventListener('input', scheduleInput);
     $('message').addEventListener('focus',viewport);
     $('message').addEventListener('blur',viewport);
+    $('message').addEventListener('compositionend',scheduleInput);
+    $('send').addEventListener('pointerdown',event=>{
+      if(event.isPrimary&&document.activeElement===$('message'))event.preventDefault();
+    });
+    bindDisclosures();
     $('message').addEventListener('paste',event=>{
       const files=[...event.clipboardData?.files||[]];
       if(files.length){event.preventDefault();addAttachments(files);}

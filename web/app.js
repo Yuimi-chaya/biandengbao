@@ -144,6 +144,24 @@ function renderTurn(turn,previous,options={}){
   }
   const oldMessages=new Map([...previous?.querySelectorAll('.message')||[]].map(node=>[node.dataset.messageId,node]));
   const oldGroups=new Map([...previous?.querySelectorAll('.activity-group')||[]].map(node=>[node.dataset.key,node]));
+  const oldSlots=new Map([...previous?.querySelectorAll('[data-stream-slot]')||[]].map(node=>[node.dataset.streamSlot,node]));
+  function activityText(parent,slot,text,className,format='plain',complete=!options.live){
+    if(!text)return;
+    const key=turn.id+'|activity|'+slot;
+    const node=ReadingUI.node(key)||oldSlots.get(key)||el('div',className);
+    node.dataset.streamSlot=key;
+    parent.append(node);
+    const stamp=format+'|'+text;
+    if(renderStamps.get(node)!==stamp||ReadingUI.has(key)){
+      renderStamps.set(node,stamp);
+      ReadingUI.update(key,node,text,complete,null,null,options.instant||!options.live&&!ReadingUI.has(key),format);
+    }
+  }
+  function collapseBody(node,label){
+    node.classList.add('collapse-detail');
+    node.tabIndex=0;node.setAttribute('role','button');node.setAttribute('aria-label','收起'+label);
+    return node;
+  }
   let activities=[];
   function flush(){
     if(!activities.length)return;
@@ -163,29 +181,36 @@ function renderTurn(turn,previous,options={}){
       const heading=el(hasDetail?'summary':'div','activity-heading');
       heading.append(BridgeUI.icon(name),el('span','activity-label',label));
       if(category==='reasoning'){
-        heading.append(el('span','reasoning-preview',parts.at(-1).headline));
-        for(const part of parts){
+        activityText(heading,key+':summary',parts.at(-1).headline,'reasoning-preview');
+        for(const [index,part] of parts.entries()){
           if(!part.detail)continue;
-          const body=el('div','reasoning-body');
+          const body=collapseBody(el('div','reasoning-body'),'思考过程');
           if(parts.length>1&&part.headline)body.append(el('strong','reasoning-title',part.headline));
-          richText(body,part.detail);group.append(body);
+          activityText(body,key+':detail:'+index,part.detail,'reasoning-text','markdown');group.append(body);
         }
       }else if(category==='compact'){
         group.classList.add('compaction-record');
         heading.append(el('span','compaction-caption',rows.some(message=>message.status==='inProgress')?'正在整理上下文':'上下文已整理'));
       }else{
         heading.append(el('span','activity-summary-count',String(rows.length)));
+        const groupBody=collapseBody(el('div','activity-body'),'工具调用');
         for(const message of rows){
           const detail=el('details','activity');detail.dataset.key=category+':'+String(message.id||message.index);
+          const presentation=ThreadUI.activityPresentation(message);
           const title=el('summary','');
           const itemIcon=({fileChange:'FileDiff',contextCompaction:'Archive',commandExecution:'Terminal',webSearch:'Search',imageView:'Image',mcpToolCall:'Wrench',dynamicToolCall:'Wrench',collabToolCall:'Users'})[message.kind]||'Wrench';
           title.append(BridgeUI.icon(itemIcon),
-            el('span','',(message.title||message.kind)+(message.status==='inProgress'?' · 进行中':'')));
+            el('span','tool-title',presentation.title+(message.status==='inProgress'?' · 进行中':'')));
           detail.append(title);
-          if(message.text)detail.append(el('pre','',message.text));
-          if(message.output)detail.append(el('pre','tool-output',message.output));
-          group.append(detail);
+          const body=collapseBody(el('div','tool-body'),presentation.title);
+          const complete=!options.live||message.status==='completed'||message.status==='failed';
+          activityText(body,detail.dataset.key+':call',presentation.call,'tool-call','plain',complete);
+          activityText(body,detail.dataset.key+':diff',presentation.diff,'tool-diff','diff',complete);
+          activityText(body,detail.dataset.key+':output',presentation.output,'tool-output','plain',complete);
+          if(message.exitCode!=null)body.append(el('small',message.exitCode?'tool-failure':'tool-success','退出码 '+message.exitCode));
+          detail.append(body);groupBody.append(detail);
         }
+        group.append(groupBody);
       }
       if(hasDetail){const chevron=BridgeUI.icon('ChevronDown');chevron.classList.add('disclosure-chevron');heading.append(chevron);}
       group.prepend(heading);
@@ -314,7 +339,7 @@ $('composer').onsubmit=async event=>{
   }catch(error){if(currentId===target&&currentHost===targetHost)$('send-error').textContent=error.message;}
   finally{sending=false;$('send').disabled=!state?.connected||BridgeUI.uploading()||ThreadUI.isCompacting(state||{});}
 };
-$('message').onkeydown=event=>{if(event.key==='Enter'&&(event.metaKey||event.ctrlKey)){event.preventDefault();$('composer').requestSubmit();}};
+$('message').onkeydown=event=>{if(!event.isComposing&&event.key==='Enter'&&(event.metaKey||event.ctrlKey)){event.preventDefault();$('composer').requestSubmit();}};
 function activeTurnId(){return [...state?.turns||[]].reverse().find(turn=>turn.status==='inProgress')?.id;}
 $('stop').onclick=()=>{stopTarget={id:currentId,host:currentHost,turn:activeTurnId()};$('stop-error').textContent='';$('stop-thread').textContent=state?.title||'';$('stop-dialog').showModal();};
 $('stop-confirm').onclick=async()=>{
