@@ -64,7 +64,7 @@
 把下面这段话发给**电脑上的 Codex App**：
 
 ```text
-请帮我部署并运行 https://github.com/Yuimi-chaya/biandengbao ：先识别 Windows 或 macOS，阅读 README；保留我现有 Codex App 聊天、模型认证、provider 和权限设置，默认启用账号密码与局域网访问。请从当前 App 环境启动，让服务继承桌面工具通道和当前线程上下文，以支持新建线程及按需连接旧线程；若我明确需要外网，再配置临时 HTTPS 隧道或已有反向代理。检查登录保护、聊天读取、实时同步和创建入口；真实发送、附件、停止、压缩等操作只在我授权的专用测试线程验证。不要关闭或重启 Codex App，不要强杀进程；需要停网关时使用 stop.py。保持服务运行，最后给我可点击的手机地址、登录凭据获取方式、启停命令、已验证结果和仍需我完成的步骤。
+请帮我部署并运行 https://github.com/Yuimi-chaya/biandengbao ：先识别 Windows 或 macOS，阅读 README；保留我现有 Codex App 聊天、模型认证、provider 和权限设置，默认启用账号密码与局域网访问。请从当前 App 环境启动，让服务继承桌面工具通道和当前线程上下文，以支持新建线程及按需连接旧线程；若我明确需要外网，再配置临时 HTTPS 隧道或已有反向代理。登录自启动默认关闭，只有我明确要求时才通过 configure.py 启用 Windows 登录任务。检查登录保护、聊天读取、实时同步和创建入口；真实发送、附件、停止、压缩等操作只在我授权的专用测试线程验证。不要关闭或重启 Codex App，不要强杀进程；需要停网关时使用 stop.py。保持服务运行，最后给我可点击的手机地址、登录凭据获取方式、启停命令、已验证结果和仍需我完成的步骤。
 ```
 
 新建线程及旧线程按需激活依赖 App 的桌面工具通道。建议让 App 内的 Agent 部署；普通终端若缺少调用上下文、发现多个通道或 App 已重启，这两项可能不可用，需从当前 App 环境重新启动网关，不能随便选一个通道。
@@ -90,6 +90,12 @@ python3 -B "$PWD/run.py" --lan
 手机连同一局域网，打开终端显示的电脑 IP 地址。账号默认 `admin`，随机密码在 `.local/首次登录.txt`。保持启动终端运行；Windows 防火墙只按需允许专用网络。如果没有 `py`，改用 `python`。
 
 停止用另一个终端运行 `py -3 -B .\stop.py`（macOS：`python3 -B stop.py`）；再次启动用上面的命令。自定义 `--config` 时启停都要传同一路径。改密码前先停止，再运行 `run.py --set-password`。重启服务后需要重新登录。
+
+### 可选：登录自启动
+
+Windows 默认不开启。先建立网关密码配置，再让 App 内的 Agent 执行 `py -3 -B .\configure.py --autostart enable`；也可双击 `configure.cmd` 选择。以后登录 Windows、打开 Codex App，后台会等待并启动局域网服务，不自动打开 App，不开启外网或免密。
+
+查看状态用 `--autostart status`，关闭用 `--autostart disable`，移除任务用 `--autostart remove`。关闭自启动不停止当前服务。自定义端口/配置和限制见 [自启动配置](docs/AUTOSTART.md)；macOS 暂不支持此选项。
 
 ### 外网访问
 
