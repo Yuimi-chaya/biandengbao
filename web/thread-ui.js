@@ -75,17 +75,40 @@ const ThreadUI = (() => {
     return typeof text === 'string' && (/^\*\*\* Begin Patch/m.test(text) || /^@@[ @+-]/m.test(text)
       || /^diff --git /m.test(text) || /^--- .+\n\+\+\+ /m.test(text));
   }
+  function activityIcon(message, name = '') {
+    if (message.kind === 'mcpToolCall' || /(^mcp[_:.]|(?:^|[._])(?:read|list)_mcp_)/i.test(name)) return 'PlugZap';
+    if (message.kind === 'skill' || /(?:^|[._])(?:use_skill|load_skill|skill)$/.test(name)) return 'Sparkles';
+    return ({ fileChange: 'FileDiff', contextCompaction: 'Archive', commandExecution: 'Terminal',
+      webSearch: 'Search', imageView: 'Image', collabToolCall: 'Users' })[message.kind] || 'Wrench';
+  }
+  function filePresentation(change) {
+    const kind = change.kind?.type ?? change.kind;
+    const created = kind === 'add' || kind === 'create';
+    const removed = kind === 'delete' || kind === 'remove';
+    const original = String(change.diff ?? '');
+    const unified = /^(?:diff --git |--- \/dev\/null|@@ -0,0 \+)/m.test(original);
+    const lines = original.split('\n');
+    if (original.endsWith('\n')) lines.pop();
+    const diff = created && original && !unified ? lines.map(line => '+' + line).join('\n') : original;
+    return { path: String(change.path || ''), label: created ? '创建文件' : removed ? '删除文件' : '修改文件',
+      icon: created ? 'FilePlus2' : removed ? 'FileMinus2' : 'FileDiff', diff, created,
+      action: created ? 'add' : removed ? 'remove' : 'update' };
+  }
   function activityPresentation(message, depth = 0) {
     if (depth > 3) return { title: '工具调用', call: '嵌套调用摘要已省略', output: '', diff: '' };
     const raw = parseValue(message.text || ''), envelope = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
     const args = parseValue(envelope.arguments ?? envelope.parameters ?? envelope.input ?? raw);
     const name = envelope.name || envelope.tool || envelope.toolName || message.title || message.kind || '工具';
-    const title = ({ commandExecution: '执行命令', fileChange: '文件变更', webSearch: '搜索网页',
+    let title = ({ commandExecution: '执行命令', fileChange: '文件变更', webSearch: '搜索网页',
       imageView: '查看图片', collabToolCall: '协作任务' })[message.kind] || name;
+    const files = message.kind === 'fileChange' && Array.isArray(message.changes) ? message.changes.map(filePresentation) : [];
+    if (files.length && files.every(file => file.created)) title = '创建文件';
     const patch = message.kind === 'fileChange' ? String(message.text || '')
       : [args, args?.patch, args?.input].find(isPatch);
+    if (!files.length && patch && /^\*\*\* Add File:/m.test(patch) && !/^\*\*\* (Update|Delete) File:/m.test(patch)) title = '创建文件';
     let call = '';
-    if (patch) call = message.kind === 'fileChange' ? '修改文件' : '应用补丁';
+    if (files.length) call = title + ' · ' + files.length + ' 个';
+    else if (patch) call = title === '创建文件' ? '创建文件' : message.kind === 'fileChange' ? '修改文件' : '应用补丁';
     else if (message.kind === 'commandExecution') call = readable(raw);
     else if (typeof args === 'string' && /^\s*[{[]/.test(args)) call = '正在接收调用信息…';
     else if (args && typeof args === 'object') {
@@ -106,7 +129,8 @@ const ThreadUI = (() => {
       }
     } else call = readable(args);
     const output = readable(parseValue(message.output ?? envelope.output ?? envelope.result ?? ''));
-    return { title: String(title), call: call || '调用 ' + name, output, diff: patch || '' };
+    return { title: String(title), call: call || '调用 ' + name, output, diff: files.length ? '' : patch || '',
+      files, icon: activityIcon(message, name) };
   }
   function diffLineKind(line) {
     if (/^(diff --git |index |--- |\+\+\+ |\*\*\* (Begin|End|Update|Add|Delete|Move)|\\ No newline)/.test(line)) return 'meta';
@@ -119,5 +143,5 @@ const ThreadUI = (() => {
     return Math.max(40, Math.min(150, shellHeight * .20, shellHeight - chromeHeight - 72));
   }
   return { reasoningParts, durationText, completedText, isCompacting, finalMessage, completedTurn, revealStep,
-    settledPrefix, activityPresentation, diffLineKind, inputMaxHeight };
+    settledPrefix, activityPresentation, activityIcon, filePresentation, diffLineKind, inputMaxHeight };
 })();

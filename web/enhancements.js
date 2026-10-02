@@ -2,7 +2,7 @@
 const BridgeUI = (() => {
   let app, creation, creating = false, contextTimer, summaryBusy = false, highlightObserver, rowObserver;
   let turnObserver, navStamp='', viewportFrame=0, uploadCount=0, attachmentKey=null, inputStamp='', inputFrame=0, inputMeasure;
-  let fullHeight=window.innerHeight, viewportStamp='';
+  let fullHeight=window.innerHeight, viewportStamp='', viewportTimer=0, keyboardBox=null, viewportWidth=window.innerWidth;
   const uploadDrafts=new Map();
   const observedTurns=new Set();
   const visibleRows = new Set();
@@ -210,19 +210,33 @@ const BridgeUI = (() => {
     $('latest').hidden = timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 110;
     $('latest').style.bottom = $('composer').getBoundingClientRect().height + 8 + 'px';
   }
-  function viewport() {
+  function viewport(event) {
+    const editing=document.activeElement===$('message')&&window.innerWidth<=720;
+    // iOS pans its visual viewport to the caret; moving the focused shell again feeds that pan.
+    if(editing&&event?.type==='scroll')return;
+    clearTimeout(viewportTimer);
+    if(editing&&keyboardBox&&event?.type==='resize'){
+      viewportTimer=setTimeout(()=>viewport(),120);
+      return;
+    }
     if(viewportFrame)return;
     viewportFrame=requestAnimationFrame(()=>{
     viewportFrame=0;
     const visual = window.visualViewport;
     // Pinch zoom belongs to the browser, not the keyboard layout controller.
     if(visual&&Math.abs(visual.scale-1)>.02)return;
-    const height = Math.round(visual?.height || window.innerHeight);
+    let height = Math.round(visual?.height || window.innerHeight);
     const shell=$('app'),timeline=$('timeline');
-    const focused=document.activeElement===$('message');
-    if(!focused)fullHeight=Math.max(fullHeight,window.innerHeight);
+    const focused=document.activeElement===$('message')&&window.innerWidth<=720;
+    if(viewportWidth!==window.innerWidth){viewportWidth=window.innerWidth;fullHeight=window.innerHeight;keyboardBox=null;}
+    if(!focused)fullHeight=window.innerHeight;
     const keyboard=focused&&height<fullHeight-100;
-    const top=Math.round(visual?.offsetTop||0);
+    const top=focused?0:Math.round(visual?.offsetTop||0);
+    if(keyboard){
+      // Small candidate-bar changes may shrink, but cannot repeatedly expand this editing session.
+      if(keyboardBox&&Math.abs(height-keyboardBox.height)<80)height=Math.min(height,keyboardBox.height);
+      keyboardBox={height};
+    }else keyboardBox=null;
     const stamp=height+'|'+top+'|'+keyboard;
     if(stamp===viewportStamp)return;
     viewportStamp=stamp;
@@ -244,9 +258,17 @@ const BridgeUI = (() => {
     const chrome=document.querySelector('.chat-head').offsetHeight;
     const extra=$('composer').offsetHeight-input.offsetHeight+$('notice').offsetHeight+chrome;
     const max=ThreadUI.inputMaxHeight(height,extra),width=input.clientWidth;
-    const stamp=currentKey()+'|'+max+'|'+width+'|'+input.value;
+    const editing=document.activeElement===input&&window.innerWidth<=720;
+    const stamp=currentKey()+'|'+max+'|'+width+'|'+(editing?'editing':input.value);
     if(stamp===inputStamp)return;
     inputStamp=stamp;
+    if(editing){
+      const next=Math.min(max,72);
+      if(Math.abs(input.getBoundingClientRect().height-next)>.5){
+        const position=ReadingUI.capture();input.style.height=next+'px';ReadingUI.restore(position);
+      }
+      latestButton();return;
+    }
     // Measure offscreen: collapsing the focused textarea makes mobile browsers move its caret.
     if(!inputMeasure){
       inputMeasure=document.createElement('textarea');
@@ -499,7 +521,7 @@ const BridgeUI = (() => {
     turnObserver=new IntersectionObserver(entries=>{
       for(const entry of entries){
         const deferred=entry.target.querySelector('.turn-process[data-defer-fold]');
-        if(!entry.isIntersecting&&deferred)ReadingUI.mutate(()=>{deferred.open=false;delete deferred.dataset.deferFold;});
+        if(!entry.isIntersecting&&deferred&&document.activeElement!==$('message'))ReadingUI.mutate(()=>{deferred.open=false;delete deferred.dataset.deferFold;});
         const dot=[...$('turn-nav').children].find(node=>node.dataset.id===entry.target.dataset.id);
         dot?.classList.toggle('in-view',entry.isIntersecting);
         if(dot)dot.setAttribute('aria-current',entry.isIntersecting?'step':'false');
@@ -529,6 +551,7 @@ const BridgeUI = (() => {
     const progress=document.createElement('span');progress.id='attachment-status';progress.className='attachment-status';progress.textContent='正在上传附件…';progress.hidden=true;
     input.append($('skill-pills'),pills,progress,$('send-error'), $('message'), document.querySelector('.compose-bottom'));
     document.querySelector('.compose-foot').before(input);
+    $('skills-button').prepend(icon('Sparkles'));
     for (const [id, name, label] of [['refresh', 'RefreshCw', '刷新线程'], ['back', 'ChevronLeft', '返回线程列表'],
       ['send', 'ArrowUp', '发送消息'], ['stop', 'Square', '停止当前任务']]) {
       $(id).replaceChildren(icon(name));
@@ -543,8 +566,8 @@ const BridgeUI = (() => {
     welcomeCreate.append(document.createTextNode('新建线程'));
     $('welcome').append(welcomeCreate);
     $('message').addEventListener('input', scheduleInput);
-    $('message').addEventListener('focus',viewport);
-    $('message').addEventListener('blur',viewport);
+    $('message').addEventListener('focus',event=>{inputStamp='';viewport(event);scheduleInput();});
+    $('message').addEventListener('blur',event=>{inputStamp='';viewport(event);scheduleInput();});
     $('message').addEventListener('compositionend',scheduleInput);
     $('send').addEventListener('pointerdown',event=>{
       if(event.isPrimary&&document.activeElement===$('message'))event.preventDefault();

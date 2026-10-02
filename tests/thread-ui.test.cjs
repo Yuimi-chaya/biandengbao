@@ -57,4 +57,17 @@ assert.equal(ui.activityPresentation({kind:'dynamicToolCall',text:JSON.stringify
 assert.equal(ui.activityPresentation({kind:'function_call_output',text:'{"output":"Done","call_id":"ignored"}'}).call, '调用结果');
 assert.equal(ui.activityPresentation({kind:'function_call_output',text:'{"output":"Done","call_id":"ignored"}'}).output, 'Done');
 assert.equal(ui.activityPresentation({kind:'custom_tool_call',text:'{"name":"tool","arguments":{}}'}).diff, '');
-console.log('48 thread UI assertions passed');
+assert.equal(ui.activityIcon({kind:'mcpToolCall'}, 'server · tool'), 'PlugZap');
+assert.equal(ui.activityIcon({kind:'function_call'}, 'mcp__server__tool'), 'PlugZap');
+assert.equal(ui.activityIcon({kind:'function_call'}, 'functions.read_mcp_resource'), 'PlugZap');
+assert.equal(ui.activityIcon({kind:'skill'}, 'anything'), 'Sparkles');
+assert.equal(ui.activityIcon({kind:'commandExecution'}, 'exec_command'), 'Terminal');
+assert.equal(ui.filePresentation({path:'new.js',kind:{type:'add'},diff:'one\n\ntwo\n'}).diff, '+one\n+\n+two');
+assert.equal(ui.filePresentation({path:'empty',kind:'add',diff:''}).diff, '');
+assert.equal(ui.filePresentation({path:'updated',kind:{type:'update'},diff:'one\ntwo'}).created, false);
+assert.equal(ui.filePresentation({path:'unknown',diff:'+added'}).label, '修改文件');
+assert.equal(ui.filePresentation({path:'new',kind:'add',diff:'@@ -0,0 +1 @@\n+one'}).diff, '@@ -0,0 +1 @@\n+one');
+assert.equal(ui.activityPresentation({kind:'fileChange',text:'new.js',changes:[{path:'new.js',kind:{type:'add'},diff:'one'}]}).title, '创建文件');
+assert.equal(ui.activityPresentation({kind:'custom_tool_call',text:JSON.stringify({name:'apply_patch',
+  input:'*** Begin Patch\n*** Add File: new.js\n+one\n*** End Patch'})}).title, '创建文件');
+console.log('60 thread UI assertions passed');

@@ -24,6 +24,10 @@ const fixture = {
         output: '[{"type":"text","text":"45 assertions passed"}]' },
       { id: 'f1', role: 'activity', kind: 'fileChange', status: 'completed', title: '文件变更',
         text: 'app.js\n--- a/app.js\n+++ b/app.js\n@@ -1 +1 @@\n-old\n+new\n unchanged' },
+      { id: 'f2', role: 'activity', kind: 'fileChange', status: 'completed', text: 'new.js',
+        changes: [{ path: 'new.js', kind: { type: 'add' }, diff: 'const created = true;\n\nexport { created };\n' }] },
+      { id: 'm1', role: 'activity', kind: 'mcpToolCall', title: 'demo · read', status: 'completed',
+        text: '{"path":"demo/resource"}', output: '"Synthetic MCP result"' },
       { id: 'a1', role: 'assistant', kind: 'agentMessage', phase: 'final_answer', text: '摘要与差异已准备。' }
     ] },
     { id: 'live', status: 'inProgress', messages: [
@@ -85,7 +89,7 @@ async function geometry(page) {
   });
 }
 async function open(page, base) {
-  page.on('pageerror', error => errors.push(error.message));
+  page.on('pageerror', error => { errors.push(error.message); console.error('pageerror:', error.message); });
   await page.goto(base);
   await page.locator('.session').first().waitFor();
   const borders = await page.evaluate(() => ({
@@ -125,6 +129,16 @@ async function details(page) {
   await process.locator('.activity-group.reasoning > summary').click();
   await process.locator('.reasoning-body').click();
   check(!await process.locator('.activity-group.reasoning').evaluate(node => node.open), 'Reasoning body collapse');
+  await tools.nth(2).locator(':scope > summary').click();
+  assert.equal(await tools.nth(2).locator('.file-change-label').innerText(), '创建文件');
+  assert.equal(await tools.nth(2).locator('.diff-line[data-kind=add]').count(), 3);
+  assert.equal(await tools.nth(2).locator('.diff-line[data-kind=context]').count(), 0);
+  assert.equal(await tools.nth(3).locator('summary svg').evaluate(node=>node.outerHTML),
+    await page.evaluate(()=>BridgeUI.icon('PlugZap').outerHTML),'MCP has dedicated icon');
+  check(await page.locator('#skills-button svg').count() === 1, 'Skill selector has icon');
+  if (output && page.viewportSize().width === 390) {
+    await pause(200); await page.screenshot({ path: path.join(output, 'creation-original.png') });
+  }
   await process.locator(':scope > summary').click();
 }
 async function typing(page, base) {
@@ -134,6 +148,7 @@ async function typing(page, base) {
   await input.fill('键盘开启时保持发送按钮可见。');
   await input.focus();
   const original = page.viewportSize();
+  let keyboardPanRange=null;
   if (original.width < 721) {
     await page.setViewportSize({ width: original.width, height: 350 });
     await pause(200);
@@ -145,6 +160,11 @@ async function typing(page, base) {
     await page.evaluate(() => { const input = $('message'); input.setSelectionRange(12, 12); });
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     const baseline = await geometry(page);
+    await input.fill('short');
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    assert.equal((await geometry(page)).input.height, baseline.input.height, 'Focused input does not grow/shrink with content');
+    await input.fill(Array(8).fill('连续输入，滚动只发生在输入框内部。').join('\n'));
+    await page.evaluate(() => $('message').setSelectionRange(12, 12));
     for (let index = 0; index < 8; index++) {
       await page.evaluate(index => {
         const view = structuredClone(state);
@@ -178,7 +198,7 @@ async function typing(page, base) {
       check(Math.abs(next.input.top - baseline.input.top) < 1 && next.scrollY === 0, 'Typing and snapshots preserve input geometry');
     }
     await page.setViewportSize({ width: original.width, height: 300 });
-    await pause(100);
+    await pause(200);
     const shorter = await geometry(page);
     check(shorter.send.bottom <= 300 && shorter.timeline.height >= 60 && shorter.scrollY === 0, '300px keyboard viewport remains usable');
     await page.setViewportSize({ width: original.width, height: 350 });
@@ -202,11 +222,25 @@ async function typing(page, base) {
     await pause(100);
     const visual = await geometry(page);
     check(visual.send.bottom <= 348 && visual.keyboard, 'Offset visual viewport keeps send in bounds');
-    for (const offset of [8.1, 8.2, 8.4, 8.1]) {
+    const panTops=[];
+    for (const offset of [8.1, 28, 0, 34, 8.1]) {
       await page.evaluate(offset => { window.testTop = offset; visualViewport.dispatchEvent(new Event('scroll')); }, offset);
       await pause(40);
-      check(Math.abs((await geometry(page)).input.top - visual.input.top) < 1, 'Fractional viewport jitter ignored');
+      panTops.push((await geometry(page)).input.top);
+      check(Math.abs((await geometry(page)).input.top - visual.input.top) < 1, 'Caret-pan scroll events cannot move shell');
     }
+    for(const [height,top] of [[328,28],[350,0],[330,34],[340,8]]){
+      await page.evaluate(([height,top])=>{
+        window.testHeight=height;window.testTop=top;
+        visualViewport.dispatchEvent(new Event('resize'));visualViewport.dispatchEvent(new Event('scroll'));
+      },[height,top]);
+      await pause(35);
+      const next=await geometry(page);
+      check(Math.abs(next.input.top-visual.input.top)<1&&next.active==='message','IME resize storms do not reflow the focused input');
+    }
+    await pause(180);
+    check(Math.abs((await geometry(page)).input.top-visual.input.top)<1,'Settled candidate-bar cycle stays stable');
+    keyboardPanRange=Math.max(...panTops)-Math.min(...panTops);
     await page.evaluate(() => {
       window.testHeight = undefined; window.testTop = undefined;
       visualViewport.dispatchEvent(new Event('resize'));
@@ -284,7 +318,7 @@ async function typing(page, base) {
     await page.locator('#timeline').evaluate(node => { node.scrollTop = node.scrollHeight; });
     await page.screenshot({ path: path.join(output, 'thread-original.png') });
   }
-  results.push({ viewport: original, keyboard: original.width < 721, details: true, pacedActivity: true, reducedMotion: true });
+  results.push({ viewport: original, keyboard: original.width < 721, keyboardPanRange, details: true, pacedActivity: true, reducedMotion: true });
 }
 (async () => {
   if (output) await fs.mkdir(output, { recursive: true });

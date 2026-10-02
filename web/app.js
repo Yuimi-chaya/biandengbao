@@ -198,7 +198,7 @@ function renderTurn(turn,previous,options={}){
           const detail=el('details','activity');detail.dataset.key=category+':'+String(message.id||message.index);
           const presentation=ThreadUI.activityPresentation(message);
           const title=el('summary','');
-          const itemIcon=({fileChange:'FileDiff',contextCompaction:'Archive',commandExecution:'Terminal',webSearch:'Search',imageView:'Image',mcpToolCall:'Wrench',dynamicToolCall:'Wrench',collabToolCall:'Users'})[message.kind]||'Wrench';
+          const itemIcon=presentation.icon||'Wrench';
           title.append(BridgeUI.icon(itemIcon),
             el('span','tool-title',presentation.title+(message.status==='inProgress'?' · 进行中':'')));
           detail.append(title);
@@ -206,6 +206,15 @@ function renderTurn(turn,previous,options={}){
           const complete=!options.live||message.status==='completed'||message.status==='failed';
           activityText(body,detail.dataset.key+':call',presentation.call,'tool-call','plain',complete);
           activityText(body,detail.dataset.key+':diff',presentation.diff,'tool-diff','diff',complete);
+          for(const [index,file] of (presentation.files||[]).entries()){
+            const fileBody=el('div','file-change');
+            const heading=el('div','file-change-heading');
+            heading.dataset.action=file.action;
+            heading.append(BridgeUI.icon(file.icon),el('span','file-change-path',file.path),el('span','file-change-label',file.label));
+            fileBody.append(heading);
+            activityText(fileBody,detail.dataset.key+':file:'+index,file.diff,'tool-diff','diff',complete);
+            body.append(fileBody);
+          }
           activityText(body,detail.dataset.key+':output',presentation.output,'tool-output','plain',complete);
           if(message.exitCode!=null)body.append(el('small',message.exitCode?'tool-failure':'tool-success','退出码 '+message.exitCode));
           detail.append(body);groupBody.append(detail);
@@ -359,7 +368,7 @@ $('model-select').onchange=()=>{modelDirty=true;renderEfforts();};
 $('effort-select').onchange=()=>{modelDirty=true;};
 $('custom-model').oninput=()=>{modelDirty=true;};
 $('model-form').onsubmit=async event=>{event.preventDefault();$('model-save').disabled=true;$('model-error').textContent='';const model=$('model-select').value==='__custom__'?$('custom-model').value.trim():$('model-select').value;try{const result=await api('/api/sessions/'+currentId+'/settings',{model,effort:$('effort-select').value});$('model-dialog').close();toast(result.confirmed?'桌面模型设置已同步':'桌面已接受设置，等待同步');}catch(e){$('model-error').textContent=e.message;}finally{$('model-save').disabled=false;}};
-function renderSkillPills(){$('skill-count').textContent=selectedSkills.size?'('+selectedSkills.size+')':'';$('skill-pills').replaceChildren();for(const id of selectedSkills){const skill=catalogData?.skills.find(s=>s.id===id);const pill=el('button','skill-pill',(skill?.displayName||'已选 Skill')+' ×');pill.type='button';pill.onclick=()=>{selectedSkills.delete(id);renderSkillPills();renderSkills();};$('skill-pills').append(pill);}if(currentId)sessionStorage.setItem('skills:'+chatKey(),JSON.stringify([...selectedSkills]));}
+function renderSkillPills(){$('skill-count').textContent=selectedSkills.size?'('+selectedSkills.size+')':'';$('skill-pills').replaceChildren();for(const id of selectedSkills){const skill=catalogData?.skills.find(s=>s.id===id);const pill=el('button','skill-pill',(skill?.displayName||'已选 Skill')+' ×');pill.prepend(BridgeUI.icon('Sparkles'));pill.type='button';pill.onclick=()=>{selectedSkills.delete(id);renderSkillPills();renderSkills();};$('skill-pills').append(pill);}if(currentId)sessionStorage.setItem('skills:'+chatKey(),JSON.stringify([...selectedSkills]));}
 function renderSkills(){$('skill-list').replaceChildren();const search=$('skill-search').value.toLocaleLowerCase();for(const skill of catalogData?.skills||[]){if(![skill.name,skill.displayName,skill.description].join(' ').toLocaleLowerCase().includes(search))continue;const label=el('label','skill-option');const input=el('input');input.type='checkbox';input.value=skill.id;input.checked=selectedSkills.has(skill.id);input.onchange=()=>{if(input.checked&&selectedSkills.size>=8){input.checked=false;toast('最多选择 8 个 Skill');return;}if(input.checked)selectedSkills.add(skill.id);else selectedSkills.delete(skill.id);renderSkillPills();};const content=el('span');content.append(el('strong','',skill.displayName),el('small','',skill.description));label.append(input,content);$('skill-list').append(label);}if(!$('skill-list').children.length)$('skill-list').append(el('p','muted','没有匹配的 Skill'));}
 async function openSkills(refresh=false){if(!currentId)return;$('skills-error').textContent='';$('skill-list').textContent='正在读取已安装 Skill…';if(!$('skills-dialog').open)$('skills-dialog').showModal();try{await loadCatalog(refresh);renderSkills();renderSkillPills();}catch(e){$('skills-error').textContent=e.message;$('skill-list').replaceChildren();}}
 $('skills-button').onclick=()=>openSkills();$('skills-refresh').onclick=()=>openSkills(true);$('skill-search').oninput=renderSkills;

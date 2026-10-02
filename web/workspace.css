@@ -109,6 +109,14 @@ button, summary, a { touch-action: manipulation; }
 .tool-success, .tool-failure { display: block; margin-top: 8px; font-size: 10px; }
 .tool-success { color: #35704a; }
 .tool-failure { color: #a33e43; }
+.file-change { margin-top: 10px; }
+.file-change-heading { display: flex; align-items: center; gap: 6px; font-size: 11px; }
+.file-change-path { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.file-change-label { color: #747474; flex: none; }
+.file-change-heading[data-action=add] .file-change-label { color: #35704a; }
+.file-change-heading[data-action=remove] .file-change-label { color: #a33e43; }
+#skills-button, .skill-pill { display: inline-flex; align-items: center; gap: 4px; }
+#skills-button svg, .skill-pill svg { width: 14px; height: 14px; flex: none; }
 .reasoning-body { border-left: 2px solid #e5e5e5; padding: 4px 14px; margin: 6px 0 12px 7px; font-size: 12px; line-height: 1.7; color: #7b7b7b; }
 .reasoning-body { cursor: pointer; }
 .reasoning-title { color: #606060; font-weight: 500; }
@@ -175,6 +183,7 @@ button, summary, a { touch-action: manipulation; }
   .keyboard-open .context-strip { min-height: 27px; margin-bottom: 2px; padding: 0; }
   .keyboard-open .composer { padding-bottom: 4px; }
   .keyboard-open .composer textarea { min-height: 40px; }
+  .composer textarea:focus { min-height: 40px; }
   .keyboard-open .skill-pills, .keyboard-open .attachment-pills { flex-wrap: nowrap; overflow-x: auto; max-height: 42px; }
   .keyboard-open #send-error { max-height: 45px; overflow-y: auto; }
   .keyboard-open .composer-tools .tool-button { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

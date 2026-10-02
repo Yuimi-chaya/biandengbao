@@ -14,6 +14,21 @@ from test_bridge import THREAD, ROOT, state
 
 
 class ReasoningTimingTests(unittest.TestCase):
+    def test_file_creation_retains_kind_and_content_once(self):
+        item = {"type": "fileChange", "changes": [
+            {"path": "new.py", "kind": {"type": "add"}, "diff": "print('new')\n"},
+            {"path": "old.py", "kind": {"type": "update"}, "diff": "-old\n+new"}]}
+        row = normalize_item(item)
+        self.assertEqual(row["changes"], item["changes"])
+        self.assertEqual(row["text"], "new.py\nold.py")
+        self.assertNotIn("print", row["text"])
+        item["changes"][0]["kind"]["type"] = "update"
+        self.assertEqual(row["changes"][0]["kind"]["type"], "add")
+
+    def test_unknown_file_kind_is_not_invented(self):
+        row = normalize_item({"type": "fileChange", "changes": [{"path": "unknown.py", "diff": "body"}]})
+        self.assertIsNone(row["changes"][0]["kind"])
+
     def test_summary_detail_are_separate_and_encrypted_content_not_exposed(self):
         row = normalize_item({"type": "reasoning", "summary": ["**Headline**", {"text": "Summary"}],
                               "content": [{"type": "reasoning_text", "text": "Available detail"}],

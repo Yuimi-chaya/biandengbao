@@ -107,7 +107,10 @@ def normalize_item(item):
     elif kind == "commandExecution":
         row.update(role="activity", title="执行命令", text=item.get("command", ""), output=item.get("aggregatedOutput", ""), exitCode=item.get("exitCode"))
     elif kind == "fileChange":
-        row.update(role="activity", title="文件变更", text="\n\n".join(str(c.get("path", "")) + "\n" + str(c.get("diff", "")) for c in item.get("changes", [])))
+        changes = [{"path": c.get("path", ""), "kind": copy.deepcopy(c.get("kind")),
+                    "diff": c.get("diff", "")} for c in item.get("changes", []) if isinstance(c, dict)]
+        row.update(role="activity", title="文件变更", changes=changes,
+                   text="\n".join(str(c["path"]) for c in changes))
     elif kind in ("mcpToolCall", "dynamicToolCall"):
         row.update(role="activity", title=" · ".join(str(x) for x in (item.get("server"), item.get("tool", item.get("toolName"))) if x), text=json.dumps(item.get("arguments", {}), ensure_ascii=False, indent=2), output=json.dumps(item.get("result", item.get("contentItems", item.get("error", ""))), ensure_ascii=False, indent=2))
     elif kind == "error":
