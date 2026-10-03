@@ -355,6 +355,8 @@ const BridgeUI = (() => {
     finally{uploadCount--;$('attachment-status').hidden=true;$('attachment-input').value='';$('send').disabled=!app.canSend()||!app.getState()?.connected||app.isSending()||ThreadUI.isCompacting(app.getState()||{});latestButton();}
   }
   function renderTurnNav(turns){
+    const visibleIds=new Set([...$('messages').children].filter(node=>!node.hidden).map(node=>node.dataset.id));
+    turns=turns.filter(turn=>visibleIds.has(turn.id));
     const stamp=JSON.stringify(turns.map(turn=>[turn.id,turn.status,turn.messages.find(message=>message.role==='user')?.text?.slice(0,100)]));
     const nav=$('turn-nav');
     if(stamp!==navStamp){
@@ -461,6 +463,11 @@ const BridgeUI = (() => {
     create.className = 'new-thread-button primary';
     create.title = '新建线程';
     create.setAttribute('aria-label', '新建线程');
+    const appearance=()=>{ThemeUI.apply();$('appearance-dialog').showModal();};
+    for(const target of [actions,document.querySelector('.chat-head'),document.querySelector('.login > .wordmark')]){
+      const control=button('SunMoon','外观设置',appearance);
+      control.dataset.appearanceButton='true';target.append(control);
+    }
     actions.append($('refresh'));
     document.querySelector('.sidebar-head').append(actions);
     document.querySelector('.sidebar-head').after(create);
@@ -504,7 +511,21 @@ const BridgeUI = (() => {
         <p id="compact-thread" class="compact-thread"></p>
         <form id="compact-form"><p id="compact-error" class="error" role="alert"></p><button id="compact-confirm" type="submit" class="primary">压缩此线程</button></form>
       </dialog>`;
-    document.body.append(dialogs);
+    const appearanceDialog=document.createElement('dialog');
+    appearanceDialog.id='appearance-dialog';appearanceDialog.className='picker appearance-dialog';
+    const appearanceHead=document.createElement('div');appearanceHead.className='picker-head';
+    const appearanceTitle=document.createElement('h2');appearanceTitle.textContent='外观';
+    appearanceTitle.id='appearance-title';appearanceDialog.setAttribute('aria-labelledby',appearanceTitle.id);
+    appearanceHead.append(appearanceTitle,button('X','关闭外观设置',()=>appearanceDialog.close()));
+    const choices=document.createElement('fieldset');choices.className='appearance-choices';
+    const legend=document.createElement('legend');legend.textContent='配色方案';choices.append(legend);
+    for(const [value,label,name] of [['system','跟随系统','Monitor'],['light','浅色','Sun'],['dark','深色','Moon']]){
+      const option=document.createElement('label'),input=document.createElement('input');
+      input.type='radio';input.name='appearance';input.value=value;input.checked=ThemeUI.preference()===value;
+      input.onchange=()=>ThemeUI.set(value);option.append(icon(name),document.createTextNode(label),input);choices.append(option);
+    }
+    appearanceDialog.append(appearanceHead,choices);dialogs.append(appearanceDialog);
+    document.body.append(dialogs);ThemeUI.apply();
     dialogs.querySelectorAll('[data-close]').forEach(node => node.onclick = () => $(node.dataset.close).close());
   }
   function init(options) {
@@ -601,5 +622,5 @@ const BridgeUI = (() => {
   }
   return { init, icon, button, richText, renderContext, decorateSession, releaseSession, releaseTurn, resetChat, scheduleContexts, latestButton,
     unobserveCode:code=>highlightObserver.unobserve(code),
-    renderTurnNav, resizeInput, attachments, clearAttachments, uploading:()=>uploadCount>0 };
+    renderTurnNav, resizeInput, attachments, clearAttachments, copyText, uploading:()=>uploadCount>0 };
 })();

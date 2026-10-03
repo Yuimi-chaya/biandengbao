@@ -81,6 +81,60 @@ class NativeOperationTests(unittest.TestCase):
         self.assertEqual(len([call for call in self.fixture.requests
                               if call["method"] == "thread-follower-compact-thread"]), 1)
 
+    def test_compaction_terminal_marker_clears_pending_without_usage_change(self):
+        self.bridge.compact(THREAD, str(uuid.uuid4()))
+        session = self.bridge.live[THREAD]
+        self.fixture.state.setdefault("turns", []).append({
+            "turnId": "compact-new", "status": "completed",
+            "items": [{"type": "contextCompaction", "id": "compact-item"}]})
+        self.fixture.revision += 1
+        self.fixture.snapshot()
+        with session.condition:
+            session.condition.wait_for(lambda: not session.compaction_pending, timeout=2)
+        self.assertFalse(session.compaction_pending)
+
+    def test_old_terminal_marker_does_not_finish_new_compaction(self):
+        self.fixture.state.setdefault("turns", []).append({
+            "turnId": "compact-old", "status": "completed",
+            "items": [{"type": "contextCompaction", "id": "old"}]})
+        self.bridge.compact(THREAD, str(uuid.uuid4()))
+        self.fixture.revision += 1
+        self.fixture.snapshot()
+        session = self.bridge.live[THREAD]
+        with session.condition:
+            session.condition.wait_for(lambda: session.revision == self.fixture.revision, timeout=2)
+        self.assertTrue(session.compaction_pending)
+
+    def test_same_compaction_marker_finishes_only_at_terminal_status(self):
+        self.bridge.compact(THREAD, str(uuid.uuid4()))
+        item = {"type": "contextCompaction", "id": "live-compact", "status": "inProgress"}
+        self.fixture.state["turns"] = [{"turnId": "compact", "status": "inProgress", "items": [item]}]
+        self.fixture.revision += 1
+        self.fixture.snapshot()
+        session = self.bridge.live[THREAD]
+        with session.condition:
+            session.condition.wait_for(lambda: session.revision == self.fixture.revision, timeout=2)
+        self.assertTrue(session.compaction_pending)
+        item["status"] = "completed"
+        self.fixture.revision += 1
+        self.fixture.snapshot()
+        with session.condition:
+            session.condition.wait_for(lambda: not session.compaction_pending, timeout=2)
+        self.assertFalse(session.compaction_pending)
+
+    def test_historical_page_does_not_finish_current_compaction(self):
+        self.fixture.state["turns"] = [{"turnId": "latest", "status": "completed", "items": []}]
+        self.bridge.compact(THREAD, str(uuid.uuid4()))
+        self.fixture.state["turns"].insert(0, {
+            "turnId": "older", "status": "completed",
+            "items": [{"type": "contextCompaction", "id": "older-compact"}]})
+        self.fixture.revision += 1
+        self.fixture.snapshot()
+        session = self.bridge.live[THREAD]
+        with session.condition:
+            session.condition.wait_for(lambda: session.revision == self.fixture.revision, timeout=2)
+        self.assertTrue(session.compaction_pending)
+
     def test_create_validated_and_deduplicated_native_app_call(self):
         self.bridge.desktop_tools = Mock()
         self.bridge.creation_options = lambda: {

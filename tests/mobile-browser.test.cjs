@@ -58,6 +58,9 @@ const server = http.createServer(async (request, response) => {
     }
     if (url.pathname === '/api/sessions') return json({ sessions, unavailableHosts: [] });
     if (url.pathname === '/api/contexts') return json({ contexts: [] });
+    const models=[{id:'demo-codex',name:'Demo Codex',efforts:['low','medium','high'],defaultEffort:'high',description:'合成模型，仅用于界面回归'}];
+    if(url.pathname==='/api/create-options')return json({canCreate:true,projects:[{projectId:'demo',label:'测试工作区',hostDisplayName:'此电脑'}],models});
+    if(url.pathname.endsWith('/catalog'))return json({models,currentModel:'demo-codex',currentEffort:'high',skills:[{id:'demo-skill',name:'review',displayName:'代码审查',description:'用于验证深色界面的合成 Skill'}]});
     if (url.pathname.endsWith('/events')) {
       eventStarts++;
       if(eventDelay)await pause(eventDelay);
@@ -214,7 +217,8 @@ async function details(page) {
   await group.locator(':scope > summary').click();
   const tools = group.locator('.activity');
   await tools.first().locator(':scope > summary').click();
-  assert.equal((await tools.first().locator('.tool-call').innerText()).trim(), '目录：C:/Demo\nnode tests/thread-ui.test.cjs');
+  assert.equal((await tools.first().locator('.tool-call').innerText()).trim(), 'node tests/thread-ui.test.cjs');
+  assert.match(await tools.first().locator('.tool-metadata').textContent(), /目录：C:\/Demo/);
   check(!(await tools.first().innerText()).includes('yield_time_ms'), 'No raw parameter structure');
   await tools.first().locator('.tool-body').click();
   check(!await tools.first().evaluate(node => node.open), 'Detail body collapses its own tool');
@@ -237,13 +241,93 @@ async function details(page) {
   assert.equal(await tools.nth(2).locator('.file-change-label').innerText(), '创建文件');
   assert.equal(await tools.nth(2).locator('.diff-line[data-kind=add]').count(), 3);
   assert.equal(await tools.nth(2).locator('.diff-line[data-kind=context]').count(), 0);
-  assert.equal(await tools.nth(3).locator('summary svg').evaluate(node=>node.outerHTML),
+  assert.equal(await tools.nth(3).locator('summary svg').first().evaluate(node=>node.outerHTML),
     await page.evaluate(()=>BridgeUI.icon('PlugZap').outerHTML),'MCP has dedicated icon');
   check(await page.locator('#skills-button svg').count() === 1, 'Skill selector has icon');
   if (output && page.viewportSize().width === 390) {
     await pause(200); await page.screenshot({ path: path.join(output, 'creation-original.png') });
   }
   await process.locator(':scope > summary').click();
+}
+async function appearance(page, base) {
+  await page.goto(base);
+  await page.locator('.session').first().waitFor();
+  const width=page.viewportSize().width;
+  await page.locator('#sidebar [data-appearance-button]').click();
+  await page.locator('[name=appearance][value=dark]').check();
+  assert.equal(await page.locator('html').getAttribute('data-theme'),'dark');
+  await page.getByRole('button',{name:'关闭外观设置'}).click();
+  assert.equal(await page.locator('.session').nth(1).evaluate(node=>getComputedStyle(node).backgroundColor),'rgb(33, 33, 33)');
+  assert.equal(await page.locator('#new-thread').evaluate(node=>getComputedStyle(node).backgroundColor),'rgb(236, 236, 236)');
+  if(output)await page.screenshot({path:path.join(output,'workspace-dark-'+width+'.png')});
+  await page.locator('#new-thread').click();
+  await page.waitForFunction(()=>!document.getElementById('new-create').disabled);
+  assert.equal(await page.locator('#new-dialog').evaluate(node=>getComputedStyle(node).backgroundColor),'rgb(38, 38, 38)');
+  if(output&&width===390)await page.screenshot({path:path.join(output,'create-dark.png')});
+  await page.locator('[data-close=new-dialog]').click();
+  await page.reload();
+  await page.locator('.session').first().waitFor();
+  assert.equal(await page.locator('html').getAttribute('data-theme'),'dark');
+  await page.emulateMedia({colorScheme:'light'});
+  assert.equal(await page.locator('html').getAttribute('data-theme'),'dark','Explicit theme overrides system');
+  await page.evaluate(()=>ThemeUI.set('system'));
+  assert.equal(await page.locator('html').getAttribute('data-theme'),'light');
+  await page.emulateMedia({colorScheme:'dark'});
+  await page.waitForFunction(()=>document.documentElement.dataset.theme==='dark');
+  await page.evaluate(()=>ThemeUI.set('light'));
+  assert.equal(await page.locator('.session').nth(1).evaluate(node=>getComputedStyle(node).backgroundColor),'rgb(255, 255, 255)');
+  if(output)await page.screenshot({path:path.join(output,'workspace-light-'+width+'.png')});
+  await open(page,base);
+  await page.locator('#message').fill('切换主题保留草稿与光标');
+  const caret=await page.locator('#message').evaluate(node=>node.selectionStart);
+  await page.evaluate(()=>ThemeUI.set('dark'));
+  assert.equal(await page.locator('#message').evaluate(node=>node.selectionStart),caret);
+  assert.equal(await page.locator('#message').inputValue(),'切换主题保留草稿与光标');
+  const darkColors=await page.evaluate(()=>({canvas:getComputedStyle(document.getElementById('timeline')).backgroundColor,composer:getComputedStyle(document.querySelector('.composer-input')).backgroundColor,text:getComputedStyle(document.getElementById('message')).color}));
+  assert.deepEqual(darkColors,{canvas:'rgb(33, 33, 33)',composer:'rgb(43, 43, 43)',text:'rgb(236, 236, 236)'});
+  await page.locator('#message').blur();
+  await page.evaluate(()=>{
+    const view=structuredClone(state);view.status='idle';
+    view.turns[1].status='completed';
+    for(let i=0;i<3;i++)view.turns.push({id:'compact-'+i,status:'completed',messages:[{id:'c'+i,role:'activity',kind:'contextCompaction'}]});
+    view.compactionPending=true;renderState(view);
+  });
+  assert.equal(await page.locator('.compaction-record').count(),0,'Pending owns one indicator');
+  assert.equal(await page.locator('#working:not([hidden])').count(),1);
+  assert.equal(await page.locator('#turn-nav .turn-dot').count(),2,'Empty compaction-only turns have no phantom navigation');
+  await page.evaluate(()=>renderState({...state,compactionPending:false}));
+  assert.equal(await page.locator('.compaction-record').count(),1);
+  assert.match(await page.locator('.compaction-record').textContent(),/连续 3 次/);
+  assert.equal(await page.locator('#working:not([hidden])').count(),0);
+  assert.equal(await page.locator('.compaction-record details').count(),0);
+  await page.locator('.turn-process > summary').first().click();
+  await page.locator('.activity-group.tools > summary').click();
+  await page.locator('.activity > summary').first().click();
+  assert.equal(await page.locator('.activity').first().locator('.tool-section-head').count(),2);
+  assert.match(await page.locator('.activity').first().locator('.tool-metadata').textContent(),/C:\/Demo/);
+  assert.equal(await page.locator('.activity').first().locator('.tool-call').textContent(),'node tests/thread-ui.test.cjs');
+  assert.equal(await page.evaluate(()=>{
+    const before=document.querySelector('.activity');
+    const view=structuredClone(state);view.turns[0].messages.find(message=>message.id==='m1').output='Updated synthetic MCP output';
+    renderState(view);
+    return document.querySelector('.activity')===before;
+  }),true,'Unchanged tool details reuse their DOM across sibling output updates');
+  if(output)await page.screenshot({path:path.join(output,'tools-dark-'+width+'.png')});
+  await page.locator('#chat [data-appearance-button]').click();
+  if(output)await page.screenshot({path:path.join(output,'appearance-dark-'+width+'.png')});
+  await page.getByRole('button',{name:'关闭外观设置'}).click();
+  await page.locator('#model-button').click();
+  await page.waitForFunction(()=>document.getElementById('effort-select').value==='high');
+  if(output&&width===390)await page.screenshot({path:path.join(output,'model-dark.png')});
+  await page.locator('[data-close=model-dialog]').click();
+  await page.locator('#skills-button').click();
+  await page.locator('.skill-option').waitFor();
+  if(output&&width===390)await page.screenshot({path:path.join(output,'skills-dark.png')});
+  await page.locator('[data-close=skills-dialog]').first().click();
+  await page.evaluate(()=>ThemeUI.set('light'));
+  await page.locator('#message').fill('');
+  assert.equal((await geometry(page)).horizontal,false);
+  results.push({viewport:page.viewportSize(),appearance:true,compaction:true});
 }
 async function typing(page, base) {
   await open(page, base);
@@ -436,7 +520,7 @@ async function typing(page, base) {
     finally { await recoveryContext.close(); }
     for (const viewport of [{ width: 390, height: 844 }, { width: 320, height: 568 }, { width: 1366, height: 900 }]) {
       const context = await browser.newContext({ viewport, locale: 'zh-CN', timezoneId: 'Asia/Shanghai' });
-      try { await typing(await context.newPage(), base); }
+      try { const page=await context.newPage();await appearance(page,base);await typing(page, base); }
       finally { await context.close(); }
     }
     assert.deepEqual(errors, []);

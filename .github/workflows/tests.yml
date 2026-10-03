@@ -30,3 +30,4 @@ jobs:
       - run: node tests/thread-ui.test.cjs
       - run: node tests/settings.test.cjs
       - run: node tests/connection.test.cjs
+      - run: node tests/theme.test.cjs

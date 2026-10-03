@@ -105,7 +105,8 @@ def normalize_item(item):
     elif kind == "contextCompaction":
         row.update(role="activity", title="上下文压缩", text="上下文已整理" if item.get("status") != "inProgress" else "正在整理上下文")
     elif kind == "commandExecution":
-        row.update(role="activity", title="执行命令", text=item.get("command", ""), output=item.get("aggregatedOutput", ""), exitCode=item.get("exitCode"))
+        row.update(role="activity", title="执行命令", text=item.get("command", ""), output=item.get("aggregatedOutput", ""),
+                   exitCode=item.get("exitCode"), cwd=item.get("cwd"), durationMs=finite_number(item.get("durationMs")))
     elif kind == "fileChange":
         changes = [{"path": c.get("path", ""), "kind": copy.deepcopy(c.get("kind")),
                     "diff": c.get("diff", "")} for c in item.get("changes", []) if isinstance(c, dict)]

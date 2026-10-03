@@ -91,6 +91,15 @@ class AssetTests(unittest.TestCase):
         self.assertEqual(body, b"")
         self.assertEqual(plain_headers["ETag"], headers["ETag"])
 
+    def test_theme_assets_are_compressed_and_revalidated(self):
+        for name in ("theme.js", "theme.css"):
+            status, headers, body = self.raw("/" + name, {"Accept-Encoding": "gzip"})
+            self.assertEqual(status, 200)
+            self.assertEqual(headers["Content-Encoding"], "gzip")
+            self.assertTrue(gzip.decompress(body))
+            status, _, body = self.raw("/" + name, {"If-None-Match": headers["ETag"]})
+            self.assertEqual((status, body), (304, b""))
+
     def test_gzip_opt_out_and_index_never_cached(self):
         status, headers, _ = self.raw("/settings.js", {"Accept-Encoding": "gzip;q=0"})
         self.assertNotIn("Content-Encoding", headers)

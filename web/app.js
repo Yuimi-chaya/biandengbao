@@ -10,6 +10,7 @@ const catalogCache=new Map(), sessionNodes=new Map(), groupNodes=new Map();
 const seenTurns=new Map();
 const renderStamps=new WeakMap();
 const turnStamps=new WeakMap();
+const emptyCompactions=new Map();
 const chatCache=new Map();
 let olderTurns=new Map(), historyCursor=null, gapCursor=null, historyBusy=false, historyAbort=null;
 const detailReads=new Map();
@@ -217,8 +218,9 @@ async function readDetail(turnId,messageId){
 function restoreOpenDetails(){
   if(document.hidden||$('app').hidden||!$('app').classList.contains('chat-open'))return;
   for(const detail of $('messages').querySelectorAll('details[open]')){
-    let ancestor=detail.parentElement.closest('details'),hidden=false;
-    while(ancestor){if(!ancestor.open){hidden=true;break;}ancestor=ancestor.parentElement.closest('details');}
+    if(!detail.isConnected||!detail.open)continue;
+    let ancestor=detail.parentElement?.closest('details'),hidden=false;
+    while(ancestor){if(!ancestor.open){hidden=true;break;}ancestor=ancestor.parentElement?.closest('details');}
     if(hidden)continue;
     if(detail.ontoggle&&!detail.dataset.loaded&&!detail.dataset.loading&&Date.now()>=Number(detail.dataset.retryAt||0))detail.dispatchEvent(new Event('toggle'));
   }
@@ -259,6 +261,7 @@ function renderTurn(turn,previous,options={}){
   }
   const oldMessages=new Map([...previous?.querySelectorAll('.message')||[]].map(node=>[node.dataset.messageId,node]));
   const oldGroups=new Map([...previous?.querySelectorAll('.activity-group')||[]].map(node=>[node.dataset.key,node]));
+  const oldActivities=new Map([...previous?.querySelectorAll('.activity[data-key]')||[]].map(node=>[node.dataset.key,node]));
   const oldSlots=new Map([...previous?.querySelectorAll('[data-stream-slot]')||[]].map(node=>[node.dataset.streamSlot,node]));
   function activityText(parent,slot,text,className,format='plain',complete=!options.live){
     if(!text)return;
@@ -274,7 +277,7 @@ function renderTurn(turn,previous,options={}){
   }
   function collapseBody(node,label){
     node.classList.add('collapse-detail');
-    node.tabIndex=0;node.setAttribute('role','button');node.setAttribute('aria-label','收起'+label);
+    node.tabIndex=0;node.setAttribute('role','group');node.setAttribute('aria-label',label+'详情，按 Enter 收起');
     return node;
   }
   let activities=[];
@@ -324,22 +327,42 @@ function renderTurn(turn,previous,options={}){
         };
       }else if(category==='compact'){
         group.classList.add('compaction-record');
-        heading.append(el('span','compaction-caption',rows.some(message=>message.status==='inProgress')?'正在整理上下文':'上下文已整理'));
+        const count=rows.reduce((total,message)=>total+(message.compactionCount||1),0);
+        const failed=rows.some(message=>['failed','interrupted'].includes(message.status));
+        heading.querySelector('.activity-label').textContent=failed?'上下文压缩未完成':'上下文已压缩';
+        if(count>1)heading.append(el('span','compaction-caption','连续 '+count+' 次记录'));
       }else{
         heading.append(el('span','activity-summary-count',String(rows.length)));
         const groupBody=collapseBody(el('div','activity-body'),'工具调用');
         for(const message of rows){
-          const detail=el('details','activity');detail.dataset.key=category+':'+String(message.id||message.index);
+          const detailKey=category+':'+String(message.id||message.index);
+          const {index:renderIndex,...detailValue}=message;
+          const detailStamp=JSON.stringify(detailValue)+'|'+Boolean(options.live);
+          const cachedDetail=oldActivities.get(detailKey);
+          if(cachedDetail&&renderStamps.get(cachedDetail)===detailStamp){groupBody.append(cachedDetail);continue;}
+          const detail=el('details','activity');detail.dataset.key=detailKey;renderStamps.set(detail,detailStamp);
           const presentation=ThreadUI.activityPresentation(message);
           const title=el('summary','');
           const itemIcon=presentation.icon||'Wrench';
           title.append(BridgeUI.icon(itemIcon),
-            el('span','tool-title',presentation.title+(message.status==='inProgress'?' · 进行中':'')));
+            el('span','tool-title',presentation.title));
+          const status=presentation.failed||presentation.exitCode!=null&&presentation.exitCode!==0?'failed':message.status;
+          const badge=el('span','tool-state',({inProgress:'进行中',completed:'已完成',failed:'未成功',interrupted:'已中断'})[status]||'');
+          badge.dataset.state=status||'';title.append(badge);
+          const arrow=BridgeUI.icon('ChevronDown');arrow.classList.add('disclosure-chevron');title.append(arrow);
           detail.append(title);
           const body=collapseBody(el('div','tool-body'),presentation.title);
           const complete=!options.live||message.status==='completed'||message.status==='failed';
-          activityText(body,detail.dataset.key+':call',presentation.call,'tool-call','plain',complete);
-          activityText(body,detail.dataset.key+':diff',presentation.diff,'tool-diff','diff',complete);
+          function toolSection(label,text,slot,className,format='plain'){
+            if(!text)return;
+            const section=el('div','tool-section'),head=el('div','tool-section-head');
+            const copy=el('button','icon-button');copy.type='button';copy.title='复制'+label;copy.setAttribute('aria-label',copy.title);copy.append(BridgeUI.icon('Copy'));
+            copy.onclick=async event=>{event.stopPropagation();toast(await BridgeUI.copyText(text)?'已复制'+label:'复制失败，可长按选择文字');};
+            head.append(el('span','',label),copy);section.append(head);
+            activityText(section,detail.dataset.key+':'+slot,text,className,format,complete);body.append(section);
+          }
+          toolSection(presentation.command?'命令':'调用摘要',presentation.command||presentation.call,'call','tool-call');
+          toolSection('文件差异',presentation.diff,'diff','tool-diff','diff');
           for(const [index,file] of (presentation.files||[]).entries()){
             const fileBody=el('div','file-change');
             const heading=el('div','file-change-heading');
@@ -349,8 +372,14 @@ function renderTurn(turn,previous,options={}){
             activityText(fileBody,detail.dataset.key+':file:'+index,file.diff,'tool-diff','diff',complete);
             body.append(fileBody);
           }
-          activityText(body,detail.dataset.key+':output',presentation.output,'tool-output','plain',complete);
-          if(message.exitCode!=null)body.append(el('small',message.exitCode?'tool-failure':'tool-success','退出码 '+message.exitCode));
+          toolSection('输出',presentation.output,'output','tool-output');
+          if(!presentation.output&&!presentation.diff&&!presentation.files?.length&&complete)body.append(el('div','tool-section tool-empty',message.detailAvailable?'展开后读取完整结果':'未返回文本内容'));
+          if(presentation.metadata?.length||presentation.exitCode!=null){
+            const metadata=el('div','tool-metadata');
+            for(const item of presentation.metadata||[])metadata.append(el('span','',item.label+'：'+item.value));
+            if(presentation.exitCode!=null)metadata.append(el('span',presentation.exitCode?'tool-failure':'tool-success','退出码 '+presentation.exitCode));
+            body.append(metadata);
+          }
           detail.append(body);groupBody.append(detail);
           if(message.detailAvailable)detail.ontoggle=async()=>{
             if(!detail.open||detail.dataset.loading||detail.dataset.loaded)return;
@@ -375,7 +404,9 @@ function renderTurn(turn,previous,options={}){
     activities=[];
   }
   const deferWork=process&&!options.keepProcess&&!previous?.querySelector('.turn-process')?.open;
-  const messages=deferWork?turn.messages.filter(message=>message.role==='user'||message===final||message.kind==='contextCompaction'):turn.messages;
+  const visibleMessages=turn.messages.flatMap((message,index)=>message.kind!=='contextCompaction'||!options.compactions
+    ?[message]:options.compactions.has(index)?[{...message,compactionCount:options.compactions.get(index)}]:[]);
+  const messages=deferWork?visibleMessages.filter(message=>message.role==='user'||message===final||message.kind==='contextCompaction'):visibleMessages;
   for(const [index,message] of messages.entries()){
     if(message.role==='activity'){activities.push({...message,index});continue;}
     flush();
@@ -402,9 +433,11 @@ function renderTurn(turn,previous,options={}){
     parent=process?processBody:section;
   }
   flush();
+  if(process&&!deferWork&&!turn.processAvailable)process.dataset.loaded='true';
   if(process&&!section.contains(process))section.append(process);
-  if(!process&&turn.status==='completed')section.append(el('p','turn-time',ThreadUI.completedText(turn)));
+  if(!process&&turn.status==='completed'&&messages.some(message=>message.kind!=='contextCompaction'))section.append(el('p','turn-time',ThreadUI.completedText(turn)));
   if(turn.error)section.append(el('p','error',typeof turn.error==='string'?turn.error:turn.error.message||JSON.stringify(turn.error)));
+  section.hidden=!section.childElementCount;
   BridgeUI.releaseTurn(previous);
   return section;
 }
@@ -464,12 +497,14 @@ function renderState(view,initial=false){
   if(view.status==='active'&&$('send-mode').value==='send')$('send-mode').value='queue';
   if(view.status!=='active'&&['steer','queue'].includes($('send-mode').value))$('send-mode').value='send';
   const desired=new Set();
+  const compactions=ThreadUI.compactionRecords(view);
   for(const turn of view.turns){
     desired.add(turn.id);
     const completed=ThreadUI.completedTurn(turn,view);
     const live=view.connected&&!completed&&turn.status==='inProgress';
     if(!turnStamps.has(turn))turnStamps.set(turn,JSON.stringify(turn));
-    const stamp=turnStamps.get(turn)+'|'+completed+'|'+live+'|'+filesStamp;
+    const compactRows=compactions.get(turn.id)||emptyCompactions;
+    const stamp=turnStamps.get(turn)+'|'+completed+'|'+live+'|'+filesStamp+'|'+(compactRows.size?JSON.stringify([...compactRows]):'');
     if(seenTurns.get(turn.id)?.stamp===stamp)continue;
     const old=seenTurns.get(turn.id)?.node;
     const opened=new Map(old?[...old.querySelectorAll('details')].map(d=>[d.dataset.key,d.open]):[]);
@@ -477,7 +512,7 @@ function renderState(view,initial=false){
       &&position.node?.closest('.turn')===old&&(position.node.closest('.activity-group')
         ||position.node.closest('.message.assistant')?.dataset.messageId!==String(ThreadUI.finalMessage(turn)?.id)
           &&position.node.closest('.message.assistant'));
-    const node=renderTurn(turn,old,{completed,live,instant:firstNative||initial,keepProcess});
+    const node=renderTurn(turn,old,{completed,live,instant:firstNative||initial,keepProcess,compactions:compactRows});
     for(const detail of node.querySelectorAll('details'))if(opened.has(detail.dataset.key))detail.open=opened.get(detail.dataset.key);
     if(old)old.replaceWith(node);else $('messages').append(node);
     seenTurns.set(turn.id,{stamp,node});

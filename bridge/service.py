@@ -24,6 +24,19 @@ CONNECTED_IDLE_TTL = 30 * 60
 MAX_IDLE_SESSIONS = 32
 
 
+def completed_compactions(state, after=None):
+    # Missing status is a native completed marker, not an active operation.
+    turns = ordered_turns(state or {})
+    if after is not None:
+        start = next((index for index, turn in enumerate(turns) if turn.get("turnId") == after), None)
+        turns = turns[start:] if start is not None else []
+    return {(str(turn.get("turnId")), str(item.get("id") or index))
+            for turn in turns
+            for index, item in enumerate(items_array(turn.get("items", [])))
+            if item.get("type") == "contextCompaction"
+            and item.get("status") in (None, "completed", "failed", "interrupted")}
+
+
 def latest_prompt(state):
     for turn in reversed(ordered_turns(state or {})):
         for item in reversed(items_array(turn.get("items", []))):
@@ -59,6 +72,8 @@ class LiveSession:
         self.archived = False
         self.compaction_pending = False
         self.compaction_baseline = None
+        self.compaction_records = set()
+        self.compaction_anchor = None
         self.saved_state = None
         self.history_loading = False
         self.history_error = None
@@ -324,6 +339,9 @@ class Bridge:
                     raise ValueError("此线程已有压缩请求，请等待桌面更新")
                 session.compaction_pending = True
                 session.compaction_baseline = copy.deepcopy((session.state or {}).get("latestTokenUsageInfo"))
+                session.compaction_records = completed_compactions(session.state)
+                native_turns = ordered_turns(session.state or {})
+                session.compaction_anchor = native_turns[-1].get("turnId") if native_turns else None
                 session.changed()
             return self._operation(key, {"thread": thread_id},
                                    lambda: self._call(session, "thread-follower-compact-thread", {}, timeout=30))
@@ -535,7 +553,9 @@ class Bridge:
                 session.connected = True
                 session.activation_required = False
                 session.error = None
-                if session.compaction_pending and session.state.get("latestTokenUsageInfo") != session.compaction_baseline:
+                if session.compaction_pending and (
+                        session.state.get("latestTokenUsageInfo") != session.compaction_baseline
+                        or completed_compactions(session.state, session.compaction_anchor) - session.compaction_records):
                     session.compaction_pending = False
                 session.changed()
             except (ValueError, KeyError, IndexError, TypeError):

@@ -22,8 +22,30 @@ const ThreadUI = (() => {
       : '完成时间未知');
   }
   function isCompacting(view) {
-    return Boolean(view.compactionPending || view.connected && view.status === 'active' && view.turns?.some(turn => turn.status === 'inProgress'
-      && turn.messages?.some(message => message.kind === 'contextCompaction' && message.status !== 'completed')));
+    const latest = view.turns?.at(-1);
+    return Boolean(view.compactionPending || view.connected && view.status === 'active' && latest?.status === 'inProgress'
+      && latest.messages?.some(message => message.kind === 'contextCompaction' && message.status === 'inProgress'));
+  }
+  function compactionRecords(view) {
+    const visible = new Map();
+    let run = [];
+    function flush(pending = false) {
+      if (run.length && !pending) {
+        const last = run.at(-1);
+        if (!visible.has(last.turn)) visible.set(last.turn, new Map());
+        visible.get(last.turn).set(last.index, run.length);
+      }
+      run = [];
+    }
+    for (const turn of view.turns || []) {
+      for (const [index, message] of (turn.messages || []).entries()) {
+        if (message.kind === 'contextCompaction') run.push({ turn: turn.id, index });
+        else flush();
+      }
+    }
+    // The live indicator owns the trailing operation while it is pending.
+    flush(isCompacting(view));
+    return visible;
   }
   function finalMessage(turn) {
     const replies = turn.messages.filter(message => message.role === 'assistant' && message.text?.trim());
@@ -78,6 +100,8 @@ const ThreadUI = (() => {
   function activityIcon(message, name = '') {
     if (message.kind === 'mcpToolCall' || /(^mcp[_:.]|(?:^|[._])(?:read|list)_mcp_)/i.test(name)) return 'PlugZap';
     if (message.kind === 'skill' || /(?:^|[._])(?:use_skill|load_skill|skill)$/.test(name)) return 'Sparkles';
+    if (/(?:^|[._])(?:exec_command|write_stdin|shell|run_command)$/.test(name)) return 'Terminal';
+    if (/(?:^|[._])(?:apply_patch|edit_file|write_file)$/.test(name)) return 'FileDiff';
     return ({ fileChange: 'FileDiff', contextCompaction: 'Archive', commandExecution: 'Terminal',
       webSearch: 'Search', imageView: 'Image', collabToolCall: 'Users' })[message.kind] || 'Wrench';
   }
@@ -97,7 +121,7 @@ const ThreadUI = (() => {
   function activityPresentation(message, depth = 0) {
     if (depth > 3) return { title: '工具调用', call: '嵌套调用摘要已省略', output: '', diff: '' };
     const raw = parseValue(message.text || ''), envelope = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
-    const args = parseValue(envelope.arguments ?? envelope.parameters ?? envelope.input ?? raw);
+    const args = parseValue(envelope.arguments ?? envelope.parameters ?? envelope.input ?? envelope.args ?? raw);
     const name = envelope.name || envelope.tool || envelope.toolName || message.title || message.kind || '工具';
     let title = ({ commandExecution: '执行命令', fileChange: '文件变更', webSearch: '搜索网页',
       imageView: '查看图片', collabToolCall: '协作任务' })[message.kind] || name;
@@ -128,9 +152,43 @@ const ThreadUI = (() => {
         else call = readable(args);
       }
     } else call = readable(args);
-    const output = readable(parseValue(message.output ?? envelope.output ?? envelope.result ?? ''));
+    const result = toolResult(message.output ?? envelope.output ?? envelope.result ?? '');
+    const output = result.text;
+    const toolIcon = activityIcon(message, name);
+    const command = message.kind === 'commandExecution' ? readable(raw) : readable(args?.cmd ?? args?.command);
+    if (toolIcon === 'Terminal') title = '执行命令';
+    const metadata = [];
+    const cwd = message.cwd ?? args?.workdir ?? args?.cwd;
+    if (cwd) metadata.push({ label: '目录', value: String(cwd) });
+    if (message.kind === 'mcpToolCall' || toolIcon === 'PlugZap') metadata.push({ label: 'MCP', value: String(name) });
+    else if (name && !['commandExecution','fileChange','执行命令','文件变更'].includes(name)) metadata.push({ label: '工具', value: String(name) });
+    const durationMs = message.durationMs ?? result.durationMs;
+    if (Number.isFinite(durationMs) && durationMs >= 0) metadata.push({ label: '耗时', value: durationText(durationMs) });
     return { title: String(title), call: call || '调用 ' + name, output, diff: files.length ? '' : patch || '',
-      files, icon: activityIcon(message, name) };
+      command, metadata, exitCode: message.exitCode ?? result.exitCode, failed: result.failed || message.status === 'failed',
+      files, icon: toolIcon };
+  }
+  function toolResult(value, depth = 0) {
+    const raw = parseValue(value);
+    if (depth > 5) return { text: '嵌套结果过深，已省略' };
+    if (raw == null) return { text: '' };
+    if (typeof raw !== 'object') return { text: String(raw) };
+    if (raw.type === 'image' || raw.type === 'audio') return { text: raw.type === 'image' ? '[图片结果]' : '[音频结果]' };
+    if (raw.type === 'resource_link') return { text: [raw.title || raw.name, raw.uri].filter(Boolean).join(' · ') };
+    if (raw.type === 'resource') return { text: raw.resource?.text || raw.resource?.uri || '[资源结果]' };
+    if (Array.isArray(raw)) {
+      const results = raw.slice(0, 80).map(item => toolResult(item, depth + 1));
+      return { text: results.map(result => result.text).filter(Boolean).join('\n\n')
+        + (raw.length > 80 ? '\n其余结果已省略' : ''),
+        exitCode: results.find(result => result.exitCode != null)?.exitCode,
+        durationMs: results.find(result => result.durationMs != null)?.durationMs,
+        failed: results.some(result => result.failed) };
+    }
+    const nested = raw.text ?? raw.output ?? raw.content ?? raw.result;
+    const result = nested !== undefined ? toolResult(nested, depth + 1) : { text: readable(raw) };
+    return { ...result, exitCode: raw.exit_code ?? raw.exitCode ?? result.exitCode,
+      durationMs: Number.isFinite(raw.wall_time_seconds) ? raw.wall_time_seconds * 1000 : raw.durationMs ?? result.durationMs,
+      failed: Boolean(raw.isError || raw.error || result.failed) };
   }
   function diffLineKind(line) {
     if (/^(diff --git |index |--- |\+\+\+ |\*\*\* (Begin|End|Update|Add|Delete|Move)|\\ No newline)/.test(line)) return 'meta';
@@ -142,6 +200,6 @@ const ThreadUI = (() => {
   function inputMaxHeight(shellHeight, chromeHeight) {
     return Math.max(40, Math.min(150, shellHeight * .20, shellHeight - chromeHeight - 72));
   }
-  return { reasoningParts, durationText, completedText, isCompacting, finalMessage, completedTurn, revealStep,
-    settledPrefix, activityPresentation, activityIcon, filePresentation, diffLineKind, inputMaxHeight };
+  return { reasoningParts, durationText, completedText, isCompacting, compactionRecords, finalMessage, completedTurn, revealStep,
+    settledPrefix, activityPresentation, activityIcon, filePresentation, diffLineKind, inputMaxHeight, toolResult };
 })();
