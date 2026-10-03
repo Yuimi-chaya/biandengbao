@@ -82,7 +82,7 @@ class StartupMigrationTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.legacy = self.root / "old/config.json"
         self.target = self.root / "new/config.json"
         self.control = self.root / "legacy-control"
@@ -185,6 +185,11 @@ class StartupMigrationTests(unittest.TestCase):
 
     def test_same_config_directory_refused(self):
         self.migration.target_config = self.legacy.with_name("other-config.json")
+        with self.assertRaisesRegex(ValueError, "separate"):
+            self.migration.plan()
+
+    def test_equivalent_config_directory_paths_refused(self):
+        self.migration.target_config = Path(str(self.legacy.parent) + "/../old/other-config.json")
         with self.assertRaisesRegex(ValueError, "separate"):
             self.migration.plan()
 

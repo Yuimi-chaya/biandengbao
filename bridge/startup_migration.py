@@ -119,7 +119,7 @@ class StartupMigration:
             time.sleep(.25)
 
     def plan(self):
-        if self.legacy_config.parent == self.target_config.parent:
+        if same_path(self.legacy_config.parent, self.target_config.parent):
             raise ValueError("Legacy and target configs must have separate directories.")
         for path in (self.legacy_config, self.target_config, self.legacy_worker):
             if not path.is_file():
