@@ -86,6 +86,27 @@ def connect(config):
     raise RuntimeError("管理后台未就绪；请检查配置目录的 .manager/manager.log，不要重复启动")
 
 
+def verify_gui_window(window, output):
+    result = {"passed": False}
+    try:
+        if not window.events.loaded.wait(30):
+            raise RuntimeError("Native WebView did not finish loading within 30 seconds")
+        for _ in range(60):
+            result = window.evaluate_js("({passed: document.getElementById('health')?.textContent === '管理端已连接', width: innerWidth, height: innerHeight, title: document.title, theme: document.documentElement.dataset.theme})")
+            if isinstance(result, dict) and result.get("passed"):
+                break
+            time.sleep(.25)
+        if not isinstance(result, dict):
+            result = {"passed": False, "error": "Native WebView returned no page status"}
+    except Exception as error:
+        result = {"passed": False, "error": type(error).__name__ + ": " + str(error)[:500]}
+    finally:
+        try:
+            Path(output).write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+        finally:
+            window.destroy()
+
+
 def gui(record, smoke_output=None):
     try:
         import webview
@@ -98,16 +119,7 @@ def gui(record, smoke_output=None):
     window = webview.create_window("便蹬宝", url, width=1120, height=790, min_size=(760, 560),
                                    background_color="#202226" if appearance == "dark" else "#F7F8FA", text_select=True)
     def smoke():
-        result = {"passed": False}
-        try:
-            for _ in range(60):
-                time.sleep(.25)
-                result = window.evaluate_js("({passed: document.getElementById('health')?.textContent === '管理端已连接', width: innerWidth, height: innerHeight, title: document.title, theme: document.documentElement.dataset.theme})")
-                if result and result.get("passed"):
-                    break
-            Path(smoke_output).write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
-        finally:
-            window.destroy()
+        verify_gui_window(window, smoke_output)
     webview.start(smoke if smoke_output else None, gui="edgechromium" if sys.platform == "win32" else None, private_mode=True)
 
 

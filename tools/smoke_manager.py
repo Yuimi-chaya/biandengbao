@@ -86,9 +86,16 @@ def main():
             if args.gui_binary:
                 output = root / "gui-smoke.json"
                 result = subprocess.run([str(args.gui_binary.resolve()), "gui", "--config", str(config),
-                    "--smoke-gui", "--output", str(output)], timeout=35, **flags)
+                    "--smoke-gui", "--output", str(output)], timeout=75, **flags)
+                if not output.exists():
+                    runtime_log = root / ".manager/desktop-runtime.log"
+                    detail = runtime_log.read_text(encoding="utf-8", errors="replace")[-3000:] if runtime_log.exists() else "No runtime log"
+                    control = read_record(root / ".manager/control.json") or {}
+                    if control.get("token"):
+                        detail = detail.replace(control["token"], "[redacted]")
+                    raise RuntimeError("Native GUI exited without a report (code %s): %s" % (result.returncode, detail))
                 gui = json.loads(output.read_text(encoding="utf-8"))
-                assert result.returncode == 0 and gui["passed"] and gui["width"] >= 700 and gui["theme"] == "dark"
+                assert result.returncode == 0 and gui["passed"] and gui["width"] >= 700 and gui["theme"] == "dark", gui
             print(json.dumps({"passed": True, "packagedVersion": status["manager"],
                 "deviceRevocation": True, "credentialRotation": True, "cooperativeStop": True,
                 "gui": gui, "onlineUpdate": update, "realAppOperations": 0}, ensure_ascii=False))

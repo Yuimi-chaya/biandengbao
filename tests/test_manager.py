@@ -250,6 +250,41 @@ class ManagerTests(unittest.TestCase):
             self.assertEqual(fetch.call_count, 1)
 
 
+class NativeGuiVerificationTests(unittest.TestCase):
+    def check_window(self, window):
+        from manager import verify_gui_window
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "report.json"
+            verify_gui_window(window, output)
+            result = json.loads(output.read_text(encoding="utf-8"))
+        window.destroy.assert_called_once()
+        return result
+
+    def test_waits_for_loaded_before_reading_page(self):
+        window = Mock()
+        window.events.loaded.wait.return_value = True
+        window.evaluate_js.return_value = {"passed": True, "theme": "dark"}
+        self.assertTrue(self.check_window(window)["passed"])
+        window.events.loaded.wait.assert_called_once_with(30)
+        window.evaluate_js.assert_called_once()
+
+    def test_load_timeout_retains_failure_report(self):
+        window = Mock()
+        window.events.loaded.wait.return_value = False
+        result = self.check_window(window)
+        self.assertFalse(result["passed"])
+        self.assertIn("30 seconds", result["error"])
+        window.evaluate_js.assert_not_called()
+
+    def test_javascript_error_retains_failure_report(self):
+        window = Mock()
+        window.events.loaded.wait.return_value = True
+        window.evaluate_js.side_effect = RuntimeError("bridge unavailable")
+        result = self.check_window(window)
+        self.assertFalse(result["passed"])
+        self.assertIn("bridge unavailable", result["error"])
+
+
 class MacStartupTests(unittest.TestCase):
     def test_launchctl_timeout_is_actionable_and_never_replayed(self):
         with tempfile.TemporaryDirectory() as directory:
