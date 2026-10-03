@@ -21,6 +21,7 @@ from .ipc import IPCError
 from .catalog import CatalogError
 from .remote import RemoteUnavailable
 from .uploads import MAX_FILE
+from .history import state_delta
 
 LOG = logging.getLogger(__name__)
 STATIC = {"/": ("index.html", "text/html; charset=utf-8"),
@@ -267,10 +268,14 @@ class Handler(BaseHTTPRequestHandler):
                     return self.output(200, bridge.view(thread_id, background=True))
                 if action == "catalog":
                     return self.output(200, bridge.catalog(thread_id, refresh=query.get("refresh") == ["true"]))
+                if action == "history":
+                    return self.output(200, bridge.history_page(
+                        thread_id, before=query.get("before", [None])[0],
+                        turn_id=query.get("turn", [None])[0], message_id=query.get("message", [None])[0]))
                 if action == "poll":
                     return self.poll(bridge, thread_id, int(query.get("after", ["-1"])[0]))
                 if action == "events":
-                    return self.stream(bridge, thread_id)
+                    return self.stream(bridge, thread_id, delta=query.get("delta") == ["true"])
                 return self.output(404, {"error": "接口不存在"})
             if action == "upload":
                 sizes = self.headers.get_all("Content-Length", [])
@@ -365,7 +370,7 @@ class Handler(BaseHTTPRequestHandler):
                 session.viewers -= 1
                 session.touched = time.monotonic()
 
-    def stream(self, bridge, thread_id):
+    def stream(self, bridge, thread_id, delta=False):
         session = bridge.session(thread_id, background=True)
         token = self.token()
         with session.condition:
@@ -378,6 +383,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.close_connection = True
         sequence = -1
+        previous = None
         try:
             while not bridge.closed.is_set():
                 if not self.server.auth.get(token):
@@ -390,7 +396,10 @@ class Handler(BaseHTTPRequestHandler):
                     sequence = session.sequence
                 if updated:
                     view = bridge.view(thread_id, attach=False, background=True)
-                    payload = json.dumps(view, ensure_ascii=False, separators=(",", ":"))
+                    payload = json.dumps(state_delta(previous, view) if delta and previous else view,
+                                         ensure_ascii=False, separators=(",", ":"))
+                    previous = view
+                    sequence = view["sequence"]
                     self.wfile.write(f"id: {sequence}\nevent: state\ndata: {payload}\n\n".encode())
                 else:
                     self.wfile.write(b"event: heartbeat\ndata: {}\n\n")

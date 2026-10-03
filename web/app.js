@@ -4,11 +4,15 @@ let csrf='', currentId=null, state=null, listOffset=0, listQuery='', approvalSta
 let currentHost='local', listRows=[], listGeneration=0;
 let activationAttempted=false, activatingKey=null;
 let modelDirty=false, queueStamp='';
+let filesStamp='';
 let stopTarget=null;
 const catalogCache=new Map(), sessionNodes=new Map(), groupNodes=new Map();
 const seenTurns=new Map();
 const renderStamps=new WeakMap();
 const chatCache=new Map();
+let olderTurns=new Map(), historyCursor=null, gapCursor=null, historyBusy=false, historyAbort=null;
+const detailReads=new Map();
+let historyRetryAt=0;
 let transportReady=false, suspended=false, wakeTimer=0;
 function chatKey(id=currentId,host=currentHost){return host+'|'+id;}
 function sessionUrl(id,action='',host=currentHost){return '/api/sessions/'+id+(action?'/'+action:'')+'?host='+encodeURIComponent(host);}
@@ -40,7 +44,7 @@ function showLogin(passwordless=false){saveDraft();rememberChat();connection.sto
 async function start(){const auth=await api('/api/auth');transport=auth.transport||'sse';if(!auth.authenticated){showLogin(auth.passwordless);return;}csrf=auth.csrf;await enter();}
 async function enter(){$('login').hidden=true;$('app').hidden=false;const list=loadList(true).catch(e=>toast(e.message));const [id,host='local']=location.hash.slice(1).split('~');if(/^[0-9a-f-]{36}$/.test(id))await openChat(id,decodeURIComponent(host));await list;}
 $('login-form').addEventListener('submit',async event=>{event.preventDefault();$('login-button').disabled=true;$('login-error').textContent='';try{const result=await api('/api/login',{username:$('username').value,password:$('password').value});csrf=result.csrf;$('password').value='';await enter();}catch(error){$('login-error').textContent=error.message;}finally{$('login-button').disabled=false;}});
-$('logout').onclick=async()=>{await api('/api/logout',{});csrf='';state=null;currentId=null;chatCache.clear();seenTurns.clear();$('messages').replaceChildren();$('approvals').replaceChildren();$('queued').replaceChildren();$('sessions').replaceChildren();$('message').value='';sessionStorage.clear();showLogin();};
+$('logout').onclick=async()=>{await api('/api/logout',{});historyAbort?.abort();olderTurns.clear();detailReads.clear();gapCursor=null;historyCursor=null;csrf='';state=null;currentId=null;chatCache.clear();seenTurns.clear();$('messages').replaceChildren();$('approvals').replaceChildren();$('queued').replaceChildren();$('sessions').replaceChildren();$('message').value='';sessionStorage.clear();showLogin();};
 function dateText(value){if(!value)return '';return new Date(value*1000).toLocaleDateString('zh-CN',{month:'numeric',day:'numeric'});}
 $('list-mode').value=localStorage.getItem('list-mode-v2')||'project';
 $('list-mode').onchange=()=>{localStorage.setItem('list-mode-v2',$('list-mode').value);loadList(true).catch(e=>toast(e.message));};
@@ -127,6 +131,7 @@ function rememberChat(){
   const {node,...position}=ReadingUI.capture();
   const key=chatKey();chatCache.delete(key);
   if(size<=1000000)chatCache.set(key,{view:state,size,position,
+    older:[...olderTurns],cursor:historyCursor,gap:gapCursor,
     folded:[...$('messages').querySelectorAll('details[data-key]')].map(node=>[node.dataset.key,node.open])});
   let total=[...chatCache.values()].reduce((sum,entry)=>sum+entry.size,0);
   while(chatCache.size>4||total>2000000){const oldest=chatCache.keys().next().value;total-=chatCache.get(oldest).size;chatCache.delete(oldest);}
@@ -134,7 +139,7 @@ function rememberChat(){
 function syncSend(){ $('send').disabled=!transportReady||!state?.connected||sending||BridgeUI.uploading()||ThreadUI.isCompacting(state||{}); }
 const connection=ConnectionUI.create({
   visible:()=>!document.hidden&&!$('app').hidden&&$('app').classList.contains('chat-open'),
-  url:target=>sessionUrl(target.id,'events',target.host),
+  url:target=>sessionUrl(target.id,'events',target.host)+'&delta=true',
   snapshot:(target,signal)=>api(sessionUrl(target.id,'',target.host),undefined,{signal}),
   poll:(target,after,signal)=>api(sessionUrl(target.id,'poll',target.host)+'&after='+after,undefined,{signal,timeout:20000}),
   onState:view=>{transportReady=true;renderState(view,!state);},
@@ -155,6 +160,7 @@ async function openChat(id,host="local"){
   }
   document.querySelectorAll('dialog[open]').forEach(d=>d.close());
   saveDraft();rememberChat();connection.stop();BridgeUI.resetChat();transportReady=false;
+  historyAbort?.abort();historyAbort=new AbortController();historyBusy=false;olderTurns=new Map();historyCursor=null;gapCursor=null;detailReads.clear();
   currentId=id;currentHost=host;state=null;activationAttempted=false;catalogData=null;modelDirty=false;queueStamp='';
   $('model-button').disabled=true;$('model-button').textContent='正在读取模型…';
   try{selectedSkills=new Set(JSON.parse(sessionStorage.getItem('skills:'+chatKey(id,host))||'[]'));}catch{selectedSkills=new Set();}
@@ -167,6 +173,7 @@ async function openChat(id,host="local"){
   document.querySelectorAll('.session').forEach(n=>n.classList.toggle('selected',n.dataset.id===id&&n.dataset.host===host));
   const cached=chatCache.get(chatKey(id,host));
   if(cached){
+    olderTurns=new Map(cached.older||[]);historyCursor=cached.cursor;gapCursor=cached.gap||null;
     renderState(cached.view,true);
     const folded=new Map(cached.folded);
     for(const detail of $('messages').querySelectorAll('details[data-key]'))if(folded.has(detail.dataset.key))detail.open=folded.get(detail.dataset.key);
@@ -176,11 +183,12 @@ async function openChat(id,host="local"){
 }
 async function activateChat(id=currentId,host=currentHost){
   const key=chatKey(id,host);
+  const generation=connection.generation();
   if(activatingKey===key)return;
   activationAttempted=true;activatingKey=key;$('reconnect').disabled=true;
   try{
     const view=await api(sessionUrl(id,'activate',host),{});
-    if(id===currentId&&host===currentHost&&$('app').classList.contains('chat-open'))renderState(view);
+    if(id===currentId&&host===currentHost)connection.receive(view,generation);
   }catch(error){
     if(id===currentId&&host===currentHost){$('notice-text').textContent=error.message;toast(error.message);}
   }finally{
@@ -188,8 +196,20 @@ async function activateChat(id=currentId,host=currentHost){
     if(id===currentId&&host===currentHost)$('reconnect').disabled=false;
   }
 }
-$('back').onclick=()=>{saveDraft();rememberChat();connection.stop();transportReady=false;ReadingUI.reset();$('app').classList.remove('chat-open');history.replaceState(null,'',location.pathname);loadList(true).catch(e=>toast(e.message));};
+$('back').onclick=()=>{saveDraft();rememberChat();connection.stop();historyAbort?.abort();historyBusy=false;transportReady=false;ReadingUI.reset();$('app').classList.remove('chat-open');history.replaceState(null,'',location.pathname);loadList(true).catch(e=>toast(e.message));};
 function richText(node,text){BridgeUI.richText(node,text,state?.files,id=>sessionUrl(currentId,'files/'+id));}
+async function readDetail(turnId,messageId){
+  const target=currentId,host=currentHost,key=chatKey()+'|'+turnId+'|'+(messageId||'');
+  if(detailReads.has(key))return detailReads.get(key);
+  const request=api(sessionUrl(target,'history',host)+'&turn='+encodeURIComponent(turnId)
+    +(messageId?'&message='+encodeURIComponent(messageId):''),undefined,{signal:historyAbort?.signal});
+  detailReads.set(key,request);
+  try{
+    const result=await request;
+    if(currentId!==target||currentHost!==host)throw new DOMException('读取已取消','AbortError');
+    return result;
+  }finally{if(detailReads.get(key)===request)detailReads.delete(key);}
+}
 function renderTurn(turn,previous,options={}){
   const section=el('section','turn');section.dataset.id=turn.id;
   section.dataset.prompt=turn.messages.find(message=>message.role==='user')?.text?.trim().slice(0,160)||'';
@@ -197,7 +217,7 @@ function renderTurn(turn,previous,options={}){
   let parent=section;
   const completed=options.completed??(turn.status==='completed'||turn.status==='interrupted');
   const final=completed?ThreadUI.finalMessage(turn):null;
-  const process=completed&&turn.messages.some(message=>message!==final&&message.role!=='user'&&message.kind!=='contextCompaction')?el('details','turn-process'):null;
+  const process=completed&&(turn.processAvailable||turn.messages.some(message=>message!==final&&message.role!=='user'&&message.kind!=='contextCompaction'))?el('details','turn-process'):null;
   const processBody=process?el('div','turn-process-body'):null;
   if(process){
     process.dataset.key='process:'+turn.id;
@@ -207,12 +227,21 @@ function renderTurn(turn,previous,options={}){
     process.append(summary,processBody);
     if(options.keepProcess)process.open=true;
     if(options.keepProcess||previous?.querySelector('.turn-process')?.dataset.deferFold)process.dataset.deferFold='true';
-    process.ontoggle=()=>{
+    process.ontoggle=async()=>{
       if(!process.open)delete process.dataset.deferFold;
-      if(!process.open||processBody.children.length)return;
-      const content=renderTurn({...turn,status:'process',error:null,messages:turn.messages.filter(message=>message.role!=='user'&&message!==final&&message.kind!=='contextCompaction')},null);
-      content.className='turn-process-content';
-      processBody.append(content);
+      if(!process.open||process.dataset.loaded)return;
+      if(process.dataset.loading)return;
+      process.dataset.loading='true';
+      try{
+        const full=turn.processAvailable?(await readDetail(turn.id)).turn:turn;
+        if(!process.isConnected)return;
+        const end=ThreadUI.finalMessage(full);
+        const content=renderTurn({...full,status:'process',error:null,messages:full.messages.filter(message=>message.role!=='user'&&message!==end&&message.kind!=='contextCompaction')},null,{instant:true});
+        content.className='turn-process-content';
+        ReadingUI.mutate(()=>processBody.replaceChildren(content));
+        process.dataset.loaded='true';
+      }catch(error){if(error.name!=='AbortError'&&process.isConnected){processBody.textContent='详情暂未加载，收起后可重试';toast(error.message);}}
+      finally{delete process.dataset.loading;}
     };
   }
   const oldMessages=new Map([...previous?.querySelectorAll('.message')||[]].map(node=>[node.dataset.messageId,node]));
@@ -246,9 +275,9 @@ function renderTurn(turn,previous,options={}){
       const stamp=JSON.stringify(rows);
       const cached=oldGroups.get(key);
       if(cached&&renderStamps.get(cached)===stamp){(category==='compact'?section:parent).append(cached);continue;}
-      const parts=category==='reasoning'?rows.map(ThreadUI.reasoningParts).filter(part=>part.headline||part.detail):[];
-      const hasDetail=category==='tools'||category==='reasoning'&&parts.some(part=>part.detail);
-      if(category==='reasoning'&&!parts.some(part=>part.headline||part.detail))continue;
+      const parts=category==='reasoning'?rows.map(ThreadUI.reasoningParts):[];
+      const hasDetail=category==='tools'||category==='reasoning'&&(parts.some(part=>part.detail)||rows.some(row=>row.detailAvailable));
+      if(category==='reasoning'&&!parts.some(part=>part.headline||part.detail)&&!rows.some(row=>row.detailAvailable))continue;
       const group=el(hasDetail?'details':'div','activity-group '+category);group.dataset.key=key;
       renderStamps.set(group,stamp);
       const heading=el(hasDetail?'summary':'div','activity-heading');
@@ -256,11 +285,30 @@ function renderTurn(turn,previous,options={}){
       if(category==='reasoning'){
         activityText(heading,key+':summary',parts.at(-1).headline,'reasoning-preview');
         for(const [index,part] of parts.entries()){
-          if(!part.detail)continue;
+          if(!part.detail&&!rows[index]?.detailAvailable)continue;
           const body=collapseBody(el('div','reasoning-body'),'思考过程');
           if(parts.length>1&&part.headline)body.append(el('strong','reasoning-title',part.headline));
           activityText(body,key+':detail:'+index,part.detail,'reasoning-text','markdown');group.append(body);
         }
+        if(rows.some(row=>row.detailAvailable))group.ontoggle=async()=>{
+          if(!group.open||group.dataset.loading||group.dataset.loaded)return;
+          group.dataset.loading='true';
+          try{
+            const full=await Promise.all(rows.map(row=>row.detailAvailable?readDetail(turn.id,row.detailKey).then(result=>result.message):row));
+            if(!group.isConnected||!group.open)return;
+            ReadingUI.mutate(()=>{
+              group.querySelectorAll('.reasoning-body').forEach(node=>node.remove());
+              for(const row of full){
+                const part=ThreadUI.reasoningParts(row);
+                if(!part.detail)continue;
+                const body=collapseBody(el('div','reasoning-body'),'思考过程');
+                richText(body,part.detail);group.append(body);
+              }
+            });
+            group.dataset.loaded='true';
+          }catch(error){if(error.name!=='AbortError'&&group.isConnected)toast(error.message);}
+          finally{delete group.dataset.loading;}
+        };
       }else if(category==='compact'){
         group.classList.add('compaction-record');
         heading.append(el('span','compaction-caption',rows.some(message=>message.status==='inProgress')?'正在整理上下文':'上下文已整理'));
@@ -291,6 +339,19 @@ function renderTurn(turn,previous,options={}){
           activityText(body,detail.dataset.key+':output',presentation.output,'tool-output','plain',complete);
           if(message.exitCode!=null)body.append(el('small',message.exitCode?'tool-failure':'tool-success','退出码 '+message.exitCode));
           detail.append(body);groupBody.append(detail);
+          if(message.detailAvailable)detail.ontoggle=async()=>{
+            if(!detail.open||detail.dataset.loading||detail.dataset.loaded)return;
+            detail.dataset.loading='true';
+            try{
+              const full=(await readDetail(turn.id,message.detailKey)).message;
+              if(!detail.isConnected||!detail.open)return;
+              const rendered=renderTurn({...turn,status:'process',messages:[full],error:null},null,{instant:true,live:false});
+              const content=rendered.querySelector('.tool-body');
+              if(content)ReadingUI.mutate(()=>body.replaceChildren(...content.childNodes));
+              detail.dataset.loaded='true';
+            }catch(error){if(error.name!=='AbortError'&&detail.isConnected)toast(error.message);}
+            finally{delete detail.dataset.loading;}
+          };
         }
         group.append(groupBody);
       }
@@ -308,7 +369,7 @@ function renderTurn(turn,previous,options={}){
     parent=process&&message.role!=='user'&&message!==final?processBody:section;
     if(process&&!process.isConnected&&message.role!=='user'&&!section.contains(process))section.append(process);
     if(!message.text&&!message.attachments?.length)continue;
-    const key=String(message.id||index),stamp=JSON.stringify(message),cached=oldMessages.get(key);
+    const key=String(message.id||index),stamp=JSON.stringify(message)+'|'+filesStamp,cached=oldMessages.get(key);
     const streamKey=turn.id+'|'+key;
     const streaming=message.role==='assistant'&&(options.live||ReadingUI.has(streamKey));
     if(cached&&renderStamps.get(cached)===stamp&&!streaming){parent.append(cached);parent=process?processBody:section;continue;}
@@ -342,7 +403,22 @@ function renderState(view,initial=false){
   const timeline=$('timeline');
   const position=ReadingUI.capture(initial||!seenTurns.size);
   const firstNative=!state?.connected&&view.connected;
+  const freshIds=new Set(view.turns.map(turn=>turn.id));
+  if(state)for(const turn of state.turns)if(!freshIds.has(turn.id)&&!olderTurns.has(turn.id))olderTurns.set(turn.id,turn);
+  for(const turn of view.turns)if(olderTurns.has(turn.id))olderTurns.set(turn.id,turn);
+  const earlier=[...olderTurns.values()].filter(turn=>!freshIds.has(turn.id));
+  view={...view,turns:[...earlier,...view.turns]};
+  if(view.hasSavedHistory){
+    view.turns.sort((a,b)=>(a.historyIndex??Infinity)-(b.historyIndex??Infinity));
+    gapCursor=null;
+    for(let index=1;index<view.turns.length;index++){
+      const previous=view.turns[index-1],next=view.turns[index];
+      if(Number.isInteger(previous.historyIndex)&&next.historyIndex>previous.historyIndex+1){gapCursor=next.id;break;}
+    }
+  }
   state=view;
+  filesStamp=JSON.stringify(view.files||[]);
+  historyCursor=earlier.length?historyCursor:view.historyCursor||null;
   if(view.connected)activationAttempted=false;
   $('execution-host').textContent='在 '+(view.host==='local'?'电脑':view.hostLabel||'SSH 主机')+' 运行';
   $('chat-title').textContent=view.loadingHistory?'正在读取聊天…':view.title;
@@ -359,7 +435,9 @@ function renderState(view,initial=false){
   $('reconnect').textContent=view.canActivate?'连接此线程':'重新连接';
   $('reconnect').title=view.canActivate?'仅加载此线程，电脑端会切换到此线程':'重新查询原线程连接';
   $('reconnect').disabled=view.activating||activatingKey===chatKey();
-  $('history').hidden=view.historyComplete||!view.connected;
+  $('history').hidden=!gapCursor&&!historyCursor&&!view.historyLoading&&!view.historyError&&(view.historyComplete||!view.connected);
+  $('history').textContent=view.historyLoading?'正在读取已保存历史…':view.historyError?'重试读取历史':gapCursor?'补齐中间记录':historyCursor?'加载更早记录':'读取桌面完整历史';
+  $('history').disabled=historyBusy||view.historyLoading;
   $('working').hidden=view.status!=='active'&&!compacting;
   const workingMode=compacting?'compact':'task';
   if($('working').dataset.mode!==workingMode){
@@ -377,7 +455,7 @@ function renderState(view,initial=false){
     desired.add(turn.id);
     const completed=ThreadUI.completedTurn(turn,view);
     const live=view.connected&&!completed&&turn.status==='inProgress';
-    const stamp=JSON.stringify(turn)+'|'+completed+'|'+live;
+    const stamp=JSON.stringify(turn)+'|'+completed+'|'+live+'|'+filesStamp;
     if(seenTurns.get(turn.id)?.stamp===stamp)continue;
     const old=seenTurns.get(turn.id)?.node;
     const opened=new Map(old?[...old.querySelectorAll('details')].map(d=>[d.dataset.key,d.open]):[]);
@@ -403,6 +481,7 @@ function renderState(view,initial=false){
   if(transportReady&&view.activationRequired&&view.canActivate&&!activationAttempted&&$('app').classList.contains('chat-open')){
     activateChat();
   }
+  if(gapCursor&&!historyBusy&&!document.hidden&&Date.now()>=historyRetryAt)queueMicrotask(()=>loadEarlier());
 }
 function jsonPretty(value){return typeof value==='string'?value:JSON.stringify(value,null,2);}
 function renderApprovals(requests){const stamp=JSON.stringify(requests);if(stamp===approvalStamp)return;approvalStamp=stamp;$('approvals').replaceChildren();for(const request of requests){const card=el('section','approval');card.dataset.request=String(request.id);const params=request.params||{}, method=request.method;const heading=method.includes('requestUserInput')?'Codex 需要你的回复':method.includes('fileChange')?'允许修改文件？':method.includes('commandExecution')?'允许运行此命令？':method.includes('permissions')?'允许本轮权限？':'待确认请求';card.append(el('h3','',heading));const controls={};if(!request.supported){card.append(el('p','',params.message||'请在桌面 App 处理此请求'));$('approvals').append(card);continue;}if(params.reason)card.append(el('p','',params.reason));if(params.command)card.append(el('pre','',jsonPretty(params.command)));if(params.cwd)card.append(el('p','muted',params.cwd));for(const key of ['changes','grantRoot','permissions','networkApprovalContext'])if(params[key])card.append(el('pre','',jsonPretty(params[key])));const form=el('form');if(method.includes('requestUserInput')){for(const question of params.questions||[]){const label=el('label','',question.question||question.header||question.id);if(question.options?.length){const select=el('select');select.append(new Option('请选择…',''));for(const option of question.options)select.append(new Option(option.label+(option.description?' — '+option.description:''),option.label));select.append(new Option('自行填写','__custom__'));label.append(select);const custom=el('textarea');custom.rows=2;custom.hidden=true;custom.placeholder='输入你的回复';select.onchange=()=>custom.hidden=select.value!=='__custom__';label.append(custom);controls[question.id]=()=>select.value==='__custom__'?custom.value:select.value;}else{const input=el('textarea');input.rows=2;input.required=true;label.append(input);controls[question.id]=()=>input.value;}form.append(label);}}else if(method==='mcpServer/elicitation/request'){if(params.message)form.append(el('p','',params.message));const schema=params.requestedSchema||{};for(const [key,field] of Object.entries(schema.properties||{})){const label=el('label','',field.title||key);let input;if(field.enum){input=el('select');input.append(new Option('请选择…',''));for(const [i,value] of field.enum.entries())input.append(new Option(field.enumNames?.[i]||String(value),String(value)));}else{input=el('input');input.type=field.type==='boolean'?'checkbox':['number','integer'].includes(field.type)?'number':'text';if(input.type==='number')input.step=field.type==='integer'?'1':'any';}input.required=(schema.required||[]).includes(key)&&input.type!=='checkbox';if(field.description)label.append(el('p','muted',field.description));label.append(input);form.append(label);controls[key]=()=>input.type==='checkbox'?input.checked:input.value===''?undefined:['number','integer'].includes(field.type)?Number(input.value):input.value;}}const actions=el('div','actions'),error=el('p','error');async function submit(response){const buttons=card.querySelectorAll('button');buttons.forEach(b=>b.disabled=true);error.textContent='';try{await api('/api/sessions/'+currentId+'/respond',{requestId:request.id,response});toast('已发送回应');card.append(el('p','muted','已发送，等待桌面确认…'));}catch(e){error.textContent=e.message;buttons.forEach(b=>b.disabled=false);}}const isInput=method.includes('requestUserInput'),isMcp=method==='mcpServer/elicitation/request';const yes=el('button','primary',isInput?'提交回复':'本次允许');yes.type='submit';const available=params.availableDecisions;const canAccept=!available||available.includes('accept');if(isInput||isMcp||canAccept)actions.append(yes);if(!isInput){const no=el('button','secondary','拒绝');no.type='button';no.onclick=()=>submit(isMcp?{action:'decline'}:{decision:'decline'});if(!available||available.includes('decline'))actions.append(no);if(method.includes('commandExecution')||method.includes('fileChange')||isMcp){const cancel=el('button','secondary','取消');cancel.type='button';cancel.onclick=()=>submit(isMcp?{action:'cancel'}:{decision:'cancel'});if(!available||available.includes('cancel'))actions.append(cancel);}}form.onsubmit=event=>{event.preventDefault();if(isInput){const answers={};for(const [key,get] of Object.entries(controls)){const value=get();if(!value.trim()){error.textContent='请回答所有问题';return;}answers[key]=[value];}submit({answers});}else if(isMcp){const content={};for(const [key,get] of Object.entries(controls)){const value=get();if(value!==undefined)content[key]=value;}submit({action:'accept',content});}else submit({decision:'accept'});};form.append(actions,error);card.append(form);$('approvals').append(card);}}
@@ -435,8 +514,38 @@ $('stop-confirm').onclick=async()=>{
   try{await api(sessionUrl(stopTarget.id,'stop',stopTarget.host),{expectedTurnId:stopTarget.turn});$('stop-dialog').close();toast('已请求停止');}
   catch(error){$('stop-error').textContent=error.message;}finally{$('stop-confirm').disabled=false;}
 };
-$('history').onclick=async()=>{$('history').disabled=true;try{await api('/api/sessions/'+currentId+'/history',{});}catch(e){toast(e.message);}finally{$('history').disabled=false;}};
-$('reconnect').onclick=async()=>{if(state?.canActivate)return activateChat();try{renderState(await api('/api/sessions/'+currentId+'/reconnect',{}));}catch(e){toast(e.message);}};
+async function loadEarlier(){
+  if(historyBusy||!currentId||state?.historyLoading||!$('app').classList.contains('chat-open')||document.hidden)return;
+  const target=currentId,host=currentHost,controller=historyAbort;
+  const cursor=gapCursor||historyCursor,isGap=Boolean(gapCursor);
+  let progressed=false;
+  historyBusy=true;$('history').disabled=true;
+  try{
+    if(state?.historyError){
+      await api(sessionUrl(target,'reconnect',host),{});
+      return;
+    }
+    if(!cursor){if(!state?.historyComplete&&state?.connected)await api(sessionUrl(target,'history',host),{});return;}
+    const result=await api(sessionUrl(target,'history',host)+'&before='+encodeURIComponent(cursor),undefined,{signal:controller?.signal});
+    if(target!==currentId||host!==currentHost||controller!==historyAbort||!$('app').classList.contains('chat-open'))return;
+    const merged=new Map([...result.turns.map(turn=>[turn.id,turn]),...olderTurns]);
+    for(const turn of result.turns)merged.set(turn.id,turn);
+    for(const turn of state.turns)if(!result.turns.some(row=>row.id===turn.id)||state.sequence>result.sequence)merged.set(turn.id,turn);
+    olderTurns=merged;
+    if(!isGap)historyCursor=result.historyCursor||null;
+    const {turns,...metadata}=state;
+    renderState({...metadata,turns:[],historyCursor});
+    progressed=gapCursor!==cursor;
+  }catch(error){historyRetryAt=Date.now()+3000;if(error.name!=='AbortError'&&target===currentId&&host===currentHost)toast(error.message);}
+  finally{if(controller===historyAbort){historyBusy=false;$('history').disabled=Boolean(state?.historyLoading);if(progressed&&gapCursor&&!document.hidden)queueMicrotask(()=>loadEarlier());}}
+}
+$('history').onclick=loadEarlier;
+$('timeline').addEventListener('scroll',()=>{if($('timeline').scrollTop<120&&historyCursor)loadEarlier();},{passive:true});
+$('reconnect').onclick=async()=>{
+  if(state?.canActivate)return activateChat();
+  const id=currentId,host=currentHost,generation=connection.generation();
+  try{connection.receive(await api(sessionUrl(id,'reconnect',host),{}),generation);}catch(e){toast(e.message);}
+};
 document.querySelectorAll('[data-close]').forEach(button=>button.onclick=()=>$(button.dataset.close).close());
 async function loadCatalog(refresh=false){const target=currentId,targetHost=currentHost,key=chatKey(),cached=catalogCache.get(key);const value=!refresh&&cached&&Date.now()-cached.time<60000?cached.value:await api(sessionUrl(target,'catalog',targetHost)+(refresh?'&refresh=true':''));if(currentId!==target||currentHost!==targetHost)throw Error('聊天已切换');catalogData=value;catalogCache.set(key,{time:Date.now(),value});if(catalogCache.size>32)catalogCache.delete(catalogCache.keys().next().value);return value;}
 function renderEfforts(){const id=$('model-select').value,model=catalogData?.models.find(m=>m.id===id),current=state?.model||catalogData?.currentModel;const effort=state&&'effort' in state?state.effort:catalogData?.currentEffort;$('custom-model-label').hidden=id!=='__custom__';$('custom-model').required=id==='__custom__';ModelSettings.fill($('effort-select'),model,effort,id===current||id==='__custom__'&&$('custom-model').value===current);$('model-description').textContent=model?.description||'自定义模型的档位未验证，请确认当前 API 服务支持。';}
@@ -456,10 +565,11 @@ BridgeUI.init({api,openChat,loadList,sessionUrl,toast,uuid,getState:()=>state,
   getCurrent:()=>({id:currentId,host:currentHost}),
   updateRow:summary=>{const row=listRows.find(row=>row.id===summary.id&&row.host===summary.host);if(row)Object.assign(row,summary);}});
 function suspendPage(){
-  clearTimeout(wakeTimer);saveDraft();rememberChat();connection.stop();transportReady=false;suspended=true;syncSend();
+  clearTimeout(wakeTimer);saveDraft();rememberChat();connection.stop();historyAbort?.abort();historyBusy=false;transportReady=false;suspended=true;syncSend();
 }
 function resumePage(force=false){
   if(document.hidden||$('app').hidden)return;
+  if(historyAbort?.signal.aborted)historyAbort=new AbortController();
   if($('app').classList.contains('chat-open')&&currentId){
     if(!force&&!suspended&&connection.matches({id:currentId,host:currentHost}))return;
     suspended=false;connection.start({id:currentId,host:currentHost,transport});
@@ -472,5 +582,5 @@ window.addEventListener('pagehide',suspendPage);
 window.addEventListener('pageshow',event=>{if(event.persisted||suspended)scheduleResume();});
 window.addEventListener('online',()=>scheduleResume(true));
 window.addEventListener('offline',()=>{transportReady=false;syncSend();$('status').textContent='等待网络恢复';});
-window.addEventListener('focus',()=>{if(suspended)scheduleResume();});
+window.addEventListener('focus',()=>{if(suspended)scheduleResume();else connection.recover();});
 start().catch(error=>{showLogin();$('login-error').textContent=error.message;});

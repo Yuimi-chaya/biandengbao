@@ -121,12 +121,16 @@ class SessionStore:
         items, turns, current = [], [], None
         model, effort = meta.get("model"), None
         with resolved.open(encoding='utf-8') as stream:
-            for line in stream:
+            for ordinal, line in enumerate(stream):
                 try:
                     record = json.loads(line)
                 except ValueError:
                     continue
+                if not isinstance(record, dict):
+                    continue
                 payload = record.get("payload", {})
+                if not isinstance(payload, dict):
+                    continue
                 if record.get("type") == "turn_context":
                     model = payload.get("model") or model
                     if "effort" in payload:
@@ -134,7 +138,7 @@ class SessionStore:
                     elif "reasoning_effort" in payload:
                         effort = payload["reasoning_effort"]
                 elif record.get("type") == "event_msg" and payload.get("type") == "task_started":
-                    current = {"turnId": payload.get("turn_id"), "status": "inProgress", "items": [],
+                    current = {"turnId": payload.get("turn_id") or "saved-" + str(ordinal), "status": "inProgress", "items": [],
                                "turnStartedAtMs": record_time(record)}
                     turns.append(current)
                     items = current["items"]
@@ -146,7 +150,7 @@ class SessionStore:
                             current["durationMs"] = max(0, current["completedAtMs"] - current["turnStartedAtMs"])
                 elif record.get("type") == "response_item":
                     if current is None:
-                        current = {"turnId": "history", "status": "completed", "items": []}
+                        current = {"turnId": "saved-" + str(ordinal), "status": "completed", "items": []}
                         turns.append(current)
                         items = current["items"]
                     if payload.get("type") == "message" and payload.get("role") in ("user", "assistant"):

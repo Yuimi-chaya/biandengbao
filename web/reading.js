@@ -4,6 +4,8 @@ const ReadingUI = (() => {
   const rendered = new WeakMap();
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
   let timer = 0;
+  let anchorTurn = null;
+  let anchorIndex = 0;
   function blocks(turn) {
     return [...turn.querySelectorAll('.markdown:not(.stream-tail) > *, .stream-tail, .activity-heading, .activity > summary, .diff-line, .tool-call, .tool-output, .turn-process > summary')];
   }
@@ -12,10 +14,22 @@ const ReadingUI = (() => {
     const bottom = initial || timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight <= 16;
     const saved = { bottom, scrollTop: timeline.scrollTop, top };
     if (bottom) return saved;
-    for (const turn of document.getElementById('messages').children) {
+    const turns=document.getElementById('messages').children;
+    let start=0;
+    if(anchorTurn?.isConnected&&anchorTurn.getBoundingClientRect().top<=top&&anchorTurn.getBoundingClientRect().bottom>top){
+      start=turns[anchorIndex]===anchorTurn?anchorIndex:Array.prototype.indexOf.call(turns,anchorTurn);
+    }else{
+      let low=0,high=turns.length;
+      while(low<high){const middle=(low+high)>>1;if(turns[middle].getBoundingClientRect().bottom<=top)low=middle+1;else high=middle;}
+      start=low;
+    }
+    for (let index=start;index<turns.length;index++) {
+      const turn=turns[index];
       if (turn.getBoundingClientRect().bottom <= top) continue;
       const node = blocks(turn).find(node => node.getBoundingClientRect().height && node.getBoundingClientRect().bottom > top);
       if (!node) continue;
+      anchorTurn=turn;
+      anchorIndex=index;
       const message = node.closest('.message');
       return { ...saved, node, turnId: turn.dataset.id, prompt: turn.dataset.prompt,
         messageId: message?.dataset.messageId, role: message?.dataset.role,
@@ -158,7 +172,7 @@ const ReadingUI = (() => {
   function prune() {
     for (const [key, entry] of streams) if (!entry.node.isConnected) streams.delete(key);
   }
-  function reset() { clearTimeout(timer); timer = 0; streams.clear(); }
+  function reset() { clearTimeout(timer); timer = 0; streams.clear();anchorTurn=null;anchorIndex=0; }
   document.addEventListener('visibilitychange', () => {
     if (document.hidden && streams.size) tick();
   });

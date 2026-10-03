@@ -13,11 +13,12 @@ from .ipc import DesktopIPC, IPCError
 from .transport import ipc_endpoint
 from .model import apply_patches, normalize_state, normalize_request, normalize_item, items_array, ordered_turns, async_requests, context_usage, thread_settings
 from .store import SessionStore, prompt_preview
-from .files import artifact_paths
+from .files import artifact_paths, MARKDOWN_PATH
 from .catalog import Catalog
 from .remote import AppHosts, RemoteStore, RemoteCatalog, RemoteUnavailable
 from .desktop_tools import DesktopTools
 from .uploads import Uploads
+from .history import merged_turns, page, present_turn, keyed_items
 
 CONNECTED_IDLE_TTL = 30 * 60
 MAX_IDLE_SESSIONS = 32
@@ -57,22 +58,60 @@ class LiveSession:
         self.archived = False
         self.compaction_pending = False
         self.compaction_baseline = None
+        self.saved_state = None
+        self.history_loading = False
+        self.history_error = None
+        self.history_retry_at = 0
+        self.history_read_at = 0
+        self.view_cache = None
+        self.artifact_signature = None
+        self.artifact_loading = False
+        self.files = []
+        self.artifact_read_at = 0
+        self.artifact_source_sequence = -1
+        self.native_read_at = 0
+
+    def display_turns(self):
+        prefer_native = self.connected or self.native_read_at > self.history_read_at
+        return merged_turns(self.saved_state, self.state, prefer_native=prefer_native)
 
     def changed(self):
+        self.view_cache = None
         self.sequence += 1
         self.condition.notify_all()
 
     def view(self):
         with self.condition:
-            result = normalize_state(self.state or {"id": self.id}, self.connected)
+            if self.view_cache is not None:
+                return dict(self.view_cache)
+            raw = (self.state if self.connected else self.saved_state) or self.state or {"id": self.id}
+            # Normalize only metadata here; collapsed process payloads are read on demand.
+            requested_items = {request.get("params", {}).get("itemId") for request in raw.get("requests", [])}
+            related = [{"items": [item for item in items_array(turn.get("items", []))
+                                  if item.get("id") in requested_items]}
+                       for turn in ordered_turns(raw)] if requested_items else []
+            result = normalize_state({**raw, "turns": related, "turnHistory": {}}, self.connected)
+            result["requests"] += async_requests(raw)
+            all_turns = self.display_turns()
+            turns, cursor = page(all_turns)
+            start = len(all_turns) - len(turns)
+            result["turns"] = [{**present_turn(turn), "historyIndex": start + index} for index, turn in enumerate(turns)]
+            result["hasSavedHistory"] = self.saved_state is not None
+            result["historyCursor"] = cursor
+            result["historyLoading"] = self.history_loading
+            result["historyError"] = self.history_error
+            result["historyComplete"] = self.saved_state is not None or raw.get(
+                "turnHistory", {}).get("history", {}).get(
+                    "isComplete", raw.get("turnsPagination", {}).get("hasLoadedOldest", True))
             result["sequence"] = self.sequence
             result["connectionError"] = self.error
             result["connecting"] = self.connecting
-            result["loadingHistory"] = self.state is None
+            result["loadingHistory"] = self.state is None and self.saved_state is None
             result["compactionPending"] = self.compaction_pending
             result["activating"] = self.activating
             result["activationRequired"] = self.activation_required
-            return result
+            self.view_cache = result
+            return dict(result)
 
 
 class Bridge:
@@ -94,6 +133,8 @@ class Bridge:
         self.submit_lock = threading.Lock()
         self.submissions = json.loads(self.ledger_path.read_text(encoding='utf-8')) if self.ledger_path.exists() else {}
         self.summary_workers = ThreadPoolExecutor(max_workers=3, thread_name_prefix="context")
+        self.artifact_workers = ThreadPoolExecutor(max_workers=2, thread_name_prefix="artifacts")
+        self.history_workers = ThreadPoolExecutor(max_workers=2, thread_name_prefix="saved-history")
         self.desktop_tools = DesktopTools()
         self.operations_path = self.data_dir / "operations.json"
         self.operations = json.loads(self.operations_path.read_text(encoding='utf-8')) if self.operations_path.exists() else {}
@@ -301,17 +342,49 @@ class Bridge:
                     session.touched = time.monotonic()
         if background:
             if attach:
+                self._history_async(session, force)
                 self._refresh_async(session, force)
             return session
         if attach and not session.connected:
             self._attach(session)
-        if session.state is None:
-            fallback = self.store.history(thread_id)
+        if session.saved_state is None and session.state is None:
+            try:
+                fallback = self.store.history(thread_id)
+            except (OSError, ValueError, KeyError, RemoteUnavailable):
+                fallback = None
             with session.condition:
-                if session.state is None:
-                    session.state = fallback
+                if fallback is not None and session.saved_state is None:
+                    session.saved_state = fallback
                     session.changed()
         return session
+
+    def _history_async(self, session, force=False):
+        with session.condition:
+            if session.history_loading or self.closed.is_set():
+                return
+            if session.saved_state is not None and not force and time.monotonic() - session.history_read_at < 30:
+                return
+            if not force and time.monotonic() < session.history_retry_at:
+                return
+            session.history_loading = True
+            session.changed()
+        def read():
+            try:
+                saved = self.store.history(session.id)
+                with session.condition:
+                    session.saved_state = saved
+                    # Never replace a native patch base with saved rollout data.
+                    session.history_error = None
+                    session.history_read_at = time.monotonic()
+            except (OSError, ValueError, KeyError, RemoteUnavailable):
+                with session.condition:
+                    session.history_error = "已保存历史暂不可读，可重试加载"
+            finally:
+                with session.condition:
+                    session.history_loading = False
+                    session.history_retry_at = time.monotonic() + 30
+                    session.changed()
+        self.history_workers.submit(read)
 
     def _refresh_async(self, session, force=False):
         with session.condition:
@@ -323,16 +396,6 @@ class Bridge:
             session.changed()
         def refresh():
             try:
-                if session.state is None:
-                    try:
-                        fallback = self.store.history(session.id)
-                        with session.condition:
-                            if session.state is None:
-                                session.state = fallback
-                                session.changed()
-                    except (OSError, ValueError, KeyError, RemoteUnavailable):
-                        # A missing saved rollout must not prevent a live snapshot.
-                        logging.getLogger(__name__).warning("Saved history unavailable; trying desktop snapshot")
                 if not self.closed.is_set():
                     self._attach(session)
             except Exception:
@@ -465,6 +528,7 @@ class Bridge:
                 else:
                     return
                 session.revision = change["revision"]
+                session.native_read_at = time.monotonic()
                 session.connected = True
                 session.activation_required = False
                 session.error = None
@@ -521,7 +585,7 @@ class Bridge:
                 with session.condition:
                     active = (session.state or {}).get("threadRuntimeStatus", {}).get("type") == "active"
                     if (session.viewers or session.id in queued_ids or active or
-                            session.connecting or session.activating or session.compaction_pending):
+                            session.connecting or session.activating or session.compaction_pending or session.history_loading):
                         continue
                     candidates.append(session)
             candidates.sort(key=lambda session: session.touched)
@@ -564,19 +628,86 @@ class Bridge:
         view["host"] = self.host
         view["canActivate"] = self.host == "local" and not session.archived
         view["hostLabel"] = "此电脑" if self.host == "local" else self.hosts.hosts().get(self.host, {}).get("displayName", self.host)
+        self._artifacts_async(session)
         with session.condition:
-            artifacts = artifact_paths(session.state or {}, self.store.home) if self.host == "local" else {}
-        view["files"] = [{"id": k, "name": v["name"], "reference": v["reference"], "image": v["image"]} for k, v in artifacts.items()]
+            view["files"] = session.files
         with self.submit_lock:
             view["submissions"] = [{"id": k.split(":")[1], "text": v["text"], "status": v["status"]}
                                    for k, v in self.submissions.items()
                                    if k.startswith(thread_id + ":") and v["status"] in ("queued", "unknown")]
         return view
 
+    def _artifact_source(self, session):
+        items = []
+        for turn in session.display_turns():
+            for item in items_array(turn.get("items", [])):
+                text = item.get("text", "")
+                links = [match.group(0) for match in MARKDOWN_PATH.finditer(text)] if isinstance(text, str) else []
+                content = [dict(value) for value in item.get("content", [])
+                           if isinstance(value, dict) and value.get("type") in ("localImage", "image", "file")
+                           ] if isinstance(item.get("content"), list) else []
+                if links or content:
+                    items.append({"type": "agentMessage", "text": "\n".join(links), "content": content})
+        raw = (session.state if session.connected else session.saved_state) or session.state or {}
+        return {"cwd": raw.get("cwd"), "turns": [{"items": items}]}
+
+    def _artifacts_async(self, session):
+        if self.host != "local" or self.closed.is_set():
+            return
+        with session.condition:
+            if session.artifact_loading:
+                return
+            if session.artifact_source_sequence == session.sequence and time.monotonic() - session.artifact_read_at < 15:
+                return
+            session.artifact_source_sequence = session.sequence
+            source = self._artifact_source(session)
+            signature = hashlib.sha256(json.dumps(source, sort_keys=True).encode()).digest()
+            if signature == session.artifact_signature and time.monotonic() - session.artifact_read_at < 15:
+                return
+            session.artifact_loading = True
+        def read():
+            try:
+                artifacts = artifact_paths(source, self.store.home)
+                files = [{"id": key, "name": value["name"], "reference": value["reference"],
+                          "image": value["image"]} for key, value in artifacts.items()]
+                with session.condition:
+                    session.artifact_signature = signature
+                    session.artifact_read_at = time.monotonic()
+                    if session.files != files:
+                        session.files = files
+                        session.changed()
+            finally:
+                with session.condition:
+                    session.artifact_loading = False
+        self.artifact_workers.submit(read)
+
+    def history_page(self, thread_id, before=None, turn_id=None, message_id=None):
+        session = self.session(thread_id, attach=False, background=True)
+        self._history_async(session)
+        with session.condition:
+            turns = session.display_turns()
+            if turn_id:
+                turn = next((turn for turn in turns if turn.get("turnId") == turn_id), None)
+                if turn is None:
+                    raise KeyError("轮次不可用")
+                if message_id:
+                    item = next((item for key, item in keyed_items(turn) if key == message_id), None)
+                    if item is None:
+                        raise KeyError("详情不可用")
+                    return {"message": normalize_item(item), "sequence": session.sequence}
+                return {"turn": present_turn(turn, fold=False), "sequence": session.sequence}
+            rows, cursor = page(turns, before)
+            positions = {id(turn): index for index, turn in enumerate(turns)}
+            return {"id": thread_id, "host": self.host,
+                    "turns": [{**present_turn(turn), "historyIndex": positions[id(turn)]} for turn in rows],
+                    "historyCursor": cursor, "historyLoading": session.history_loading,
+                    "historyError": session.history_error, "sequence": session.sequence}
+
     def artifact(self, thread_id, artifact_id):
         session = self.session(thread_id, attach=False)
         with session.condition:
-            files = artifact_paths(session.state or {}, self.store.home) if self.host == "local" else {}
+            source = self._artifact_source(session)
+        files = artifact_paths(source, self.store.home) if self.host == "local" else {}
         if artifact_id not in files:
             raise KeyError("文件不属于此聊天的工作目录")
         return files[artifact_id]
@@ -584,9 +715,9 @@ class Bridge:
     def catalog(self, thread_id, refresh=False):
         session = self.session(thread_id)
         with session.condition:
-            cwd = session.state.get("cwd")
-            model = session.state.get("latestModel")
-            settings = thread_settings(session.state)
+            raw = session.state or session.saved_state or {}
+            cwd = raw.get("cwd")
+            settings = thread_settings(raw)
             model, effort = settings["model"], settings["effort"]
         catalog = self.catalog_reader.get(cwd, refresh=refresh)
         return {**catalog, "currentModel": model, "currentEffort": effort}
@@ -808,6 +939,8 @@ class Bridge:
     def close(self):
         self.closed.set()
         self.summary_workers.shutdown(wait=False, cancel_futures=True)
+        self.artifact_workers.shutdown(wait=False, cancel_futures=True)
+        self.history_workers.shutdown(wait=False, cancel_futures=True)
         for bridge in list(self.remote_bridges.values()):
             bridge.close()
         with self.lock:

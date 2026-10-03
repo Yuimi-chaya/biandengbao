@@ -10,7 +10,7 @@ const ID = '11111111-1111-4111-8111-111111111111';
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const output = process.env.MOBILE_UI_OUTPUT;
 const errors = [], sends = [], results = [];
-let authenticated = true, snapshotDelay = 0, snapshotReads = 0, eventStarts = 0, activations = 0;
+let authenticated = true, snapshotDelay = 0, eventDelay = 0, snapshotReads = 0, eventStarts = 0, activations = 0;
 const streams = new Set();
 const fixture = {
   id: ID, title: '手机布局与输入稳定性合成验证', host: 'local', hostLabel: '此电脑', cwd: 'C:/Demo',
@@ -60,6 +60,8 @@ const server = http.createServer(async (request, response) => {
     if (url.pathname === '/api/contexts') return json({ contexts: [] });
     if (url.pathname.endsWith('/events')) {
       eventStarts++;
+      if(eventDelay)await pause(eventDelay);
+      if(response.destroyed)return;
       const threadId = url.pathname.split('/')[3], host = url.searchParams.get('host') || 'local';
       const view = { ...fixture, id: threadId, host, title: threadId === ID ? fixture.title : '另一条合成线程' };
       response.writeHead(200, { 'Content-Type': 'text/event-stream' });
@@ -70,7 +72,9 @@ const server = http.createServer(async (request, response) => {
       return;
     }
     if (url.pathname.endsWith('/poll')) return json({ state: fixture });
-    if (url.pathname.endsWith('/activate')) { activations++;return json(fixture); }
+    if (url.pathname.endsWith('/activate')) {
+      activations++;fixture.connected=true;fixture.activationRequired=false;fixture.sequence++;return json(fixture);
+    }
     if (url.pathname.endsWith('/send')) {
       let body = '';
       for await (const chunk of request) body += chunk;
@@ -136,6 +140,7 @@ async function recovery(page, base) {
   assert.equal(snapshotReads, loads, 'Selecting the current thread does not reopen its transport');
   await page.locator('#back').click();
   snapshotDelay = 350;
+  eventDelay = 350;
   const reopening = page.evaluate(id => openChat(id, 'local'), ID);
   await pause(80);
   assert.equal(await page.locator('#chat-title').innerText(), fixture.title, 'Cached title is immediate');
@@ -144,6 +149,7 @@ async function recovery(page, base) {
   check(await page.locator('#send').isDisabled(), 'Cached state alone does not allow sending');
   await reopening;
   snapshotDelay = 0;
+  eventDelay = 0;
   assert.equal(await page.locator('#message').inputValue(), '息屏后保留的中文草稿');
   check(Math.abs(await page.locator('#timeline').evaluate(node => node.scrollTop) - position) < 3, 'Reading position survives reentry');
   const readBeforeWake = snapshotReads, eventsBeforeWake = eventStarts;
@@ -192,11 +198,8 @@ async function recovery(page, base) {
   await page.waitForFunction(() => transportReady && !document.getElementById('app').hidden);
   assert.equal(await page.locator('#message').inputValue(), '息屏后保留的中文草稿', 'Expired login retains draft');
   assert.equal(await page.locator('#composer').evaluate(node => getComputedStyle(node).borderTopWidth), '1px');
-  await page.evaluate(() => {
-    connection.stop();
-    const view=structuredClone(state);view.connected=false;view.activationRequired=true;view.canActivate=true;
-    renderState(view);
-  });
+  fixture.connected=false;fixture.activationRequired=true;fixture.canActivate=true;fixture.sequence++;
+  await page.evaluate(()=>resumePage(true));
   await page.waitForFunction(() => state.connected && !activatingKey);
   assert.equal(activations, 1, 'A lost native owner is activated once after a previous successful connection');
   if (output) await page.screenshot({ path: path.join(output, 'recovery-original.png') });

@@ -60,6 +60,10 @@
 
 ### 前台恢复与线程复用
 
+长历史回归使用 300 轮合成记录：覆盖主页预连接后的完整历史读取、原生局部快照与磁盘记录独立、同轮局部条目、分页期间新增轮次、息屏期间新增 25 轮、失联完成态刷新、重复调用 ID、完整工具输出和思考详情。首屏每页 12 轮，工具详情展开时读取；SSE 增量有明确基线序号，基线不符重新取快照。
+
+可选浏览器测试：`node tests/history-browser.test.cjs` 与 `node tests/mobile-browser.test.cjs`，需要现有 Playwright 和 Chrome。测试服务只绑定随机本机端口，不连接真实 App 或工作聊天；本机性能抽样不是 iPhone Edge 真机性能承诺。
+
 覆盖前台恢复事件合并、取消旧读取、SSE 心跳与停滞恢复、临时长轮询回退、快速切换及主机隔离。缓存有数量和文本容量上限，登录过期不丢草稿；不自动重发消息或审批。桌面已卸载的当前线程仍可能按需加载原执行器，不会新建替代线程。
 
 后端闲置连接保留 30 分钟，闲置会话最多 32 条；正在查看、执行任务、排队或连接中的会话不因该上限移除。合成测试验证十分钟后回访复用原连接、过期清理和数量限制。
@@ -78,7 +82,7 @@ Windows 自启动监测覆盖同次登录中的 App 关闭/再次打开、原生
 python3 -B -m unittest discover -s tests -v
 ```
 
-当前包含 **42 项测试**。它们使用合成会话、模拟原生 IPC 和临时本机 HTTP 服务，不调用真实模型，也不读取使用者的聊天。Windows 使用真实本机命名管道作为模拟桌面服务；macOS/Linux 使用 Unix socket。Windows 可运行 `python -B -m unittest discover -s tests -v`。
+这些测试使用合成会话、模拟原生 IPC 和临时本机 HTTP 服务，不调用真实模型，也不读取使用者的聊天。Windows 使用真实本机命名管道作为模拟桌面服务；macOS/Linux 使用 Unix socket。Windows 可运行 `python -B -m unittest discover -s tests -v`。
 
 覆盖：
 
