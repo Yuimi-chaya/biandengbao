@@ -72,6 +72,8 @@
 
 先阅读 [管理端安装与脚本接管](docs/MANAGER.md)。发布包未签名或公证；macOS 原生 App 绑定及各平台自启动仍需实机验收。已有部署切换前，先正常停止旧网关和旧自启动监听，避免两套服务。
 
+Windows 旧 `Biandengbao-LAN` 自启动与管理端占用同一端口时，可使用[迁移脚本](docs/STARTUP-MIGRATION.md)预检、备份和交接，保留管理端账号设置，无需重编译。
+
 ### 源码部署
 
 需要 **Windows 10/11 或 macOS、Python 3.9+、正在运行的 Codex App**。网关只用 Python 标准库，前端资源随仓库提供，不用 `pip install` 或 `npm install`。
