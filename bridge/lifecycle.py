@@ -43,11 +43,13 @@ class GatewayControl:
                 path.unlink(missing_ok=True)
 
 
-def request_stop(data_dir, timeout=15):
+def request_stop(data_dir, timeout=15, expected_record=None):
     path = Path(data_dir) / 'gateway-control.json'
     record = read_record(path)
     if not isinstance(record, dict) or not isinstance(record.get('pid'), int) or not record.get('token'):
         raise RuntimeError('No gateway control record; use Ctrl+C in its terminal if it is running.')
+    if expected_record is not None and record != expected_record:
+        raise RuntimeError('Gateway identity changed; no shutdown requested.')
     request = path.with_name('gateway.stop')
     request.write_text(json.dumps(record), encoding='utf-8')
     request.chmod(0o600)

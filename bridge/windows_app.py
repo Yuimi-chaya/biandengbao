@@ -56,6 +56,34 @@ def process_image(pid):
         kernel.CloseHandle(handle)
 
 
+def process_started(pid):
+    kernel = winapi()
+    kernel.GetProcessTimes.argtypes = [wintypes.HANDLE] + [
+        ctypes.POINTER(wintypes.FILETIME)] * 4
+    handle = kernel.OpenProcess(0x1000, False, pid)
+    if not handle:
+        return None
+    try:
+        values = [wintypes.FILETIME() for _ in range(4)]
+        if not kernel.GetProcessTimes(handle, *(ctypes.byref(v) for v in values)):
+            return None
+        return (values[0].dwHighDateTime << 32) | values[0].dwLowDateTime
+    finally:
+        kernel.CloseHandle(handle)
+
+
+def session_key(binding):
+    return (binding["appPid"], binding["appStarted"], binding["runtimePid"],
+            binding["runtimeStarted"])
+
+
+def session_alive(binding):
+    return (process_started(binding["appPid"]) == binding["appStarted"] and
+            process_started(binding["runtimePid"]) == binding["runtimeStarted"] and
+            valid_app_image(process_image(binding["appPid"])) and
+            process_image(binding["runtimePid"]) == binding["runtime"])
+
+
 def children(parent):
     class Entry(ctypes.Structure):
         _fields_ = [
@@ -133,10 +161,15 @@ def discover():
     app_pid = pipe_owner(PIPE_PREFIX + "codex-ipc")
     if not app_pid or not valid_app_image(process_image(app_pid)):
         return None
-    runtimes = [process_image(pid) for pid, name in children(app_pid)
+    app_started = process_started(app_pid)
+    runtimes = [(pid, process_image(pid)) for pid, name in children(app_pid)
                 if name.lower() == "codex.exe"]
-    runtimes = [image for image in runtimes if valid_runtime_image(image)]
+    runtimes = [(pid, image) for pid, image in runtimes if valid_runtime_image(image)]
     if len(runtimes) != 1:
+        return None
+    runtime_pid, runtime = runtimes[0]
+    runtime_started = process_started(runtime_pid)
+    if app_started is None or runtime_started is None:
         return None
 
     def probe(path):
@@ -150,11 +183,14 @@ def discover():
                                pipe_owner, probe)
     if not pipe or pipe_owner(pipe) != app_pid:
         return None
-    return {"appPid": app_pid, "runtime": runtimes[0], "pipe": pipe}
+    binding = {"appPid": app_pid, "appStarted": app_started,
+               "runtimePid": runtime_pid, "runtimeStarted": runtime_started,
+               "runtime": runtime, "pipe": pipe}
+    return binding if session_alive(binding) else None
 
 
 def binding_alive(binding):
     pid = binding["appPid"]
     return (pipe_owner(PIPE_PREFIX + "codex-ipc") == pid and
             pipe_owner(binding["pipe"]) == pid and
-            valid_app_image(process_image(pid)))
+            session_alive(binding))

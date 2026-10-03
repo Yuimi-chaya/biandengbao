@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from . import windows_app
+from .lifecycle import request_stop
 
 
 def supported():
@@ -99,7 +100,7 @@ class Profile:
             raise RuntimeError("首次启用请从 Codex App 当前聊天执行，需要调用上下文")
         state = self.task("status")
         if state.get("state") == "Running":
-            raise RuntimeError("自启动任务仍在等待；请先关闭，待退出后再修改配置")
+            raise RuntimeError("自启动任务仍在运行；请先关闭，待退出后再修改配置")
         value = {"schema": 1, "repository": str(self.root),
                  "config": str(self.config), "port": port,
                  "codexHome": str(Path(codex_home or previous.get("codexHome") or
@@ -240,7 +241,108 @@ def worker_lock(profile):
             msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
 
 
-def run_worker(profile):
+class Supervisor:
+    """Own only children started here; a manual stop lasts until the next App session."""
+    def __init__(self, profile, options):
+        self.profile = profile
+        self.options = options
+        self.managed = None
+        self.handled = None
+        self.last_status = None
+        self.next_discovery = 0
+
+    def status(self, state, **fields):
+        value = (state, fields)
+        if value != self.last_status:
+            self.profile.write_status(state, **fields)
+            self.last_status = value
+
+    def stop_owned(self):
+        process, record, binding = self.managed
+        if process.poll() is None:
+            request_stop(self.profile.config.parent, expected_record=record)
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired as error:
+                raise RuntimeError("网关尚未退出；不强杀、不启动第二个服务") from error
+        self.managed = None
+        self.next_discovery = 0
+        self.status("waiting_for_app")
+
+    def start(self, binding):
+        process, stdout, stderr = launch(self.profile, self.options, binding)
+        for _ in range(50):
+            if process.poll() is not None:
+                break
+            record = read_json(self.profile.config.parent / "gateway-control.json")
+            if (isinstance(record, dict) and record.get("pid") == process.pid and
+                    record.get("token") and port_busy(self.options["port"]) and
+                    windows_app.binding_alive(binding)):
+                self.managed = (process, record, binding)
+                self.handled = windows_app.session_key(binding)
+                self.status("started", gatewayPid=process.pid,
+                    appPid=binding["appPid"], port=self.options["port"],
+                    output=str(stdout), errors=str(stderr))
+                return
+            time.sleep(.2)
+        self.status("startup_failed", output=str(stdout), errors=str(stderr))
+        raise RuntimeError("启动未确认；请检查日志，不自动重放部分启动")
+
+    def tick(self):
+        if self.managed:
+            process, record, binding = self.managed
+            if process.poll() is not None:
+                self.managed = None
+                self.status("stopped_until_app_restart")
+            elif read_json(self.profile.config.parent / "gateway-control.json") != record:
+                # Normal shutdown removes its record just before the child exits.
+                if read_json(self.profile.config.parent / "gateway-control.json") is not None:
+                    raise RuntimeError("网关记录已变更；不停止未知服务")
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired as error:
+                    raise RuntimeError("网关记录丢失但进程仍在运行；不接管、不重启") from error
+                self.managed = None
+                self.status("stopped_until_app_restart")
+            elif not windows_app.session_alive(binding):
+                self.stop_owned()
+            elif windows_app.binding_alive(binding):
+                self.status("monitoring", gatewayPid=process.pid,
+                    appPid=binding["appPid"], port=self.options["port"])
+                return 3
+            elif time.monotonic() < self.next_discovery:
+                return 3
+            else:
+                self.next_discovery = time.monotonic() + 15
+                replacement = windows_app.discover()
+                if replacement and (windows_app.session_key(replacement) != self.handled or
+                                    replacement["pipe"] != binding["pipe"]):
+                    self.stop_owned()
+                    self.handled = None
+                else:
+                    self.status("waiting_for_channel", gatewayPid=process.pid)
+                    return 3
+        existing = active_instance(self.profile)
+        if existing or port_busy(self.options["port"]):
+            # Do not take over an unrelated/manual gateway based on a port or PID.
+            self.status("existing_instance" if existing else "existing_listener",
+                        **({"gatewayPid": existing} if existing else
+                           {"port": self.options["port"]}))
+            return 15
+        binding = windows_app.discover()
+        if self.profile.disabled.exists():
+            return 0
+        if not binding:
+            self.status("waiting_for_app")
+            return 15
+        if windows_app.session_key(binding) == self.handled:
+            self.status("stopped_until_app_restart")
+            return 15
+        self.start(binding)
+        return 3
+
+
+def run_worker(profile, once=False):
     if not supported():
         raise RuntimeError("登录自启动目前仅支持 Windows")
     options = profile.load_options()
@@ -248,35 +350,12 @@ def run_worker(profile):
         if not acquired:
             profile.write_status("another_worker")
             return
+        supervisor = Supervisor(profile, options)
         while not profile.disabled.exists():
-            existing = active_instance(profile)
-            if existing:
-                profile.write_status("existing_instance", gatewayPid=existing)
+            delay = supervisor.tick()
+            if once and not profile.disabled.exists():
                 return
-            if port_busy(options["port"]):
-                profile.write_status("existing_listener", port=options["port"])
-                return
-            binding = windows_app.discover()
-            if profile.disabled.exists():
-                break
-            if binding:
-                process, stdout, stderr = launch(profile, options, binding)
-                for _ in range(50):
-                    if process.poll() is not None:
-                        break
-                    # The lifecycle record must belong to our child, not a race winner.
-                    record = read_json(profile.config.parent / "gateway-control.json")
-                    if (record and record.get("pid") == process.pid and
-                            port_busy(options["port"])):
-                        profile.write_status("started", gatewayPid=process.pid,
-                            port=options["port"], output=str(stdout), errors=str(stderr))
-                        return
-                    time.sleep(.2)
-                profile.write_status("startup_failed", output=str(stdout),
-                                     errors=str(stderr))
-                return  # Never kill or replay a partially started process.
-            profile.write_status("waiting_for_app")
-            for _ in range(15):
+            for _ in range(delay):
                 if profile.disabled.exists():
                     break
                 time.sleep(1)

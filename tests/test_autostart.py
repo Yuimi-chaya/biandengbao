@@ -89,6 +89,7 @@ class WindowsDiscoveryTests(unittest.TestCase):
                 patch.object(windows_app, "valid_app_image", return_value=True), \
                 patch.object(windows_app, "valid_runtime_image", return_value=True), \
                 patch.object(windows_app, "children", return_value=[(12, "codex.exe")]), \
+                patch.object(windows_app, "process_started", return_value=1), \
                 patch.object(windows_app.os, "listdir", return_value=["codex-browser-use-a"]), \
                 patch("bridge.desktop_tools.DesktopTools._request",
                       return_value={"tools": [{"name": name}
@@ -297,7 +298,7 @@ class AutostartTests(unittest.TestCase):
                 patch.object(autostart, "port_busy", return_value=True), \
                 patch.object(windows_app, "discover") as discover, \
                 patch.object(autostart, "launch") as launch:
-            autostart.run_worker(self.profile)
+            autostart.run_worker(self.profile, once=True)
         discover.assert_not_called()
         launch.assert_not_called()
         self.assertEqual(autostart.read_json(self.profile.control / "status.json")["state"],
@@ -363,10 +364,13 @@ class AutostartTests(unittest.TestCase):
         process.poll.return_value = None
         with patch.object(autostart, "worker_lock", unlocked), \
                 patch.object(autostart, "port_busy", side_effect=[False] + [True] * 50), \
-                patch.object(windows_app, "discover", return_value={"appPid": 10}), \
+                patch.object(windows_app, "discover", return_value={
+                    "appPid": 10, "appStarted": 1, "runtimePid": 11,
+                    "runtimeStarted": 2, "pipe": "demo"}), \
                 patch.object(autostart, "launch", return_value=(process, "log", "errors")) as launch, \
                 patch.object(autostart.time, "sleep"):
-            autostart.run_worker(self.profile)
+            with self.assertRaises(RuntimeError):
+                autostart.run_worker(self.profile, once=True)
         launch.assert_called_once()
         process.kill.assert_not_called()
         self.assertEqual(autostart.read_json(self.profile.control / "status.json")["state"],
@@ -380,9 +384,12 @@ class AutostartTests(unittest.TestCase):
         process.poll.return_value = None
         with patch.object(autostart, "worker_lock", unlocked), \
                 patch.object(autostart, "port_busy", side_effect=[False, True]), \
-                patch.object(windows_app, "discover", return_value={"appPid": 10}), \
+                patch.object(windows_app, "discover", return_value={
+                    "appPid": 10, "appStarted": 1, "runtimePid": 11,
+                    "runtimeStarted": 2, "pipe": "demo"}), \
+                patch.object(windows_app, "binding_alive", return_value=True), \
                 patch.object(autostart, "launch", return_value=(process, "log", "errors")):
-            autostart.run_worker(self.profile)
+            autostart.run_worker(self.profile, once=True)
         state = autostart.read_json(self.profile.control / "status.json")
         self.assertEqual(state["state"], "started")
         self.assertEqual(state["gatewayPid"], 21)
@@ -431,7 +438,7 @@ class AutostartTests(unittest.TestCase):
                 patch.object(windows_app, "process_image", return_value="some-process"), \
                 patch.object(autostart, "port_busy", return_value=False), \
                 patch.object(autostart, "launch") as launch:
-            autostart.run_worker(self.profile)
+            autostart.run_worker(self.profile, once=True)
         launch.assert_not_called()
         self.assertEqual(autostart.read_json(self.profile.control / "status.json")["state"],
                          "existing_instance")

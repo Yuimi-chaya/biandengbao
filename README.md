@@ -93,7 +93,7 @@ python3 -B "$PWD/run.py" --lan
 
 ### 可选：登录自启动
 
-Windows 默认不开启。先建立网关密码配置，再让 App 内的 Agent 执行 `py -3 -B .\configure.py --autostart enable`；也可双击 `configure.cmd` 选择。以后登录 Windows、打开 Codex App，后台会等待并启动局域网服务，不自动打开 App，不开启外网或免密。
+Windows 默认不开启。先建立网关密码配置，再让 App 内的 Agent 执行 `py -3 -B .\configure.py --autostart enable`；也可双击 `configure.cmd` 选择。以后登录 Windows，后台持续监测 App，同一次开机内每次打开都能启动或重新绑定局域网服务；不自动打开 App，不开启外网或免密。手动停止网关后保持停止，直到下次打开 App。
 
 查看状态用 `--autostart status`，关闭用 `--autostart disable`，移除任务用 `--autostart remove`。关闭自启动不停止当前服务。自定义端口/配置和限制见 [自启动配置](docs/AUTOSTART.md)；macOS 暂不支持此选项。
 
