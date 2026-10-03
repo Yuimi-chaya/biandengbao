@@ -2,6 +2,7 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   const titles = {overview:'一切，就在手边',connection:'让手机，连上你的电脑',devices:'登录设备',settings:'按你的习惯来'};
+  const initialAppearance = new URLSearchParams(location.search).get('appearance');
   let token = location.hash.slice(1);
   try { if (token) sessionStorage.setItem('manager-capability', token); else token = sessionStorage.getItem('manager-capability') || ''; } catch {}
   history.replaceState(null, '', location.pathname);
@@ -59,7 +60,7 @@
     $('worker-note').textContent=(worker.running?states[worker.state]:worker.state==='error'?states.error:'')||value.autostart.message||'';
     $('network-note').textContent=settings.network.mode==='lan'?'局域网模式 · 手机和电脑连接同一网络':settings.network.mode==='tunnel'?'临时外网 · HTTPS 地址随隧道重启而变化':'已有域名 · 由你的反向代理提供 HTTPS';
     renderAddresses(gateway,settings);renderDevices(gateway);
-    if(!initialized){$('username').value=value.username;$('port').value=settings.port;$('codex-home').value=settings.codexHome;$('cloudflared').value=settings.network.cloudflared||'';$('proxy-origin').value=settings.network.origin||'';document.querySelector('[name=mode][value='+settings.network.mode+']').checked=true;if(settings.callerThread){const option=new Option('已绑定 · '+settings.callerThread,settings.callerThread);$('caller').append(option);$('caller').value=settings.callerThread;}modeFields();initialized=true;}
+    if(!initialized){if(['system','light','dark'].includes(value.appearance)){theme=value.appearance;$('appearance').value=theme;applyTheme(theme);}$('username').value=value.username;$('port').value=settings.port;$('codex-home').value=settings.codexHome;$('cloudflared').value=settings.network.cloudflared||'';$('proxy-origin').value=settings.network.origin||'';document.querySelector('[name=mode][value='+settings.network.mode+']').checked=true;if(settings.callerThread){const option=new Option('已绑定 · '+settings.callerThread,settings.callerThread);$('caller').append(option);$('caller').value=settings.callerThread;}modeFields();initialized=true;}
     if(!value.configured)notice('先到“设置”创建网关账号，再选择一个已有聊天作为桌面调用上下文。');
     else if(gateway.tunnel?.error)notice(gateway.tunnel.error,true);
     else if(gateway.message)notice(gateway.message,true);
@@ -69,8 +70,8 @@
   function renderUpdate(result){const messages={identical:'与 main 一致',ahead:'main 有新提交',behind:'本地版本领先 main',diverged:'本地与 main 存在分叉',unknown:'无法判断版本先后'};const label=messages[result.relation]||messages.unknown;$('update-result').textContent=label+' · '+result.remoteSha.slice(0,10)+' · '+time(result.checkedAt)+'。仅检查，未自动更新。';}
   async function refresh(){if(polling){refreshQueued=true;return;}polling=true;const current=epoch;clearTimeout(timer);try{const value=await api('status');if(current===epoch)render(value);else refreshQueued=true;}catch(error){badge('health','管理端未连接',false,true);notice(error.message,true);}finally{polling=false;if(!document.hidden){const delay=refreshQueued?0:4000;refreshQueued=false;timer=setTimeout(refresh,delay);}}}
   function applyTheme(mode){const dark=mode==='dark'||(mode==='system'&&matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.dataset.theme=dark?'dark':'light';}
-  let theme='system';try{theme=localStorage.getItem('biandengbao:manager-theme')||'system';}catch{}if(!['system','light','dark'].includes(theme))theme='system';$('appearance').value=theme;applyTheme(theme);
-  $('appearance').addEventListener('change',()=>{theme=$('appearance').value;applyTheme(theme);try{localStorage.setItem('biandengbao:manager-theme',theme);}catch{}});matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>applyTheme(theme));
+  let theme=initialAppearance||'system';try{theme=initialAppearance||localStorage.getItem('biandengbao:manager-theme')||'system';}catch{}if(!['system','light','dark'].includes(theme))theme='system';$('appearance').value=theme;applyTheme(theme);
+  $('appearance').addEventListener('change',()=>{theme=$('appearance').value;applyTheme(theme);try{localStorage.setItem('biandengbao:manager-theme',theme);}catch{}api('appearance',{mode:theme}).catch(error=>toast('外观未保存：'+error.message));});matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>applyTheme(theme));
   document.querySelectorAll('[data-page]').forEach(el=>el.addEventListener('click',()=>page(el.dataset.page)));document.querySelectorAll('[data-go]').forEach(el=>el.addEventListener('click',()=>page(el.dataset.go)));
   document.querySelectorAll('[name=mode]').forEach(el=>el.addEventListener('change',modeFields));$('refresh').addEventListener('click',()=>{notice('');refresh();});
   $('service-toggle').addEventListener('click',async()=>{const stop=active();if(stop&&!await confirm('停止便蹬宝服务？','手机连接会断开。不会关闭 Codex App，也不会停止桌面聊天中的任务。','停止服务'))return;await act(stop?'service/stop':'service/start',stop?{confirm:true}:{},stop?'已请求停止网关':'已开始等待 App 连接').catch(()=>{});});

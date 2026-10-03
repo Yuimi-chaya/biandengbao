@@ -7,6 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from socketserver import TCPServer
 from urllib.error import HTTPError
+from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, ProxyHandler
 
 
@@ -84,7 +85,7 @@ class LocalHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
             self.guard(False)
-            asset = self.server.assets.get(self.path)
+            asset = self.server.assets.get(urlsplit(self.path).path)
             if not asset:
                 return self.output(404, {"ok": False, "error": "Not found"})
             path, mime = asset

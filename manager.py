@@ -91,15 +91,18 @@ def gui(record, smoke_output=None):
         import webview
     except ImportError as error:
         raise RuntimeError("源码 GUI 需要 pywebview；发布版已内置。脚本命令不需要此依赖") from error
-    url = "http://127.0.0.1:%d/#%s" % (record["port"], record["token"])
+    preference = read_record(Path(record["config"]).parent / ".manager/preferences.json")
+    appearance = preference.get("appearance") if isinstance(preference, dict) else "system"
+    appearance = appearance if appearance in ("system", "light", "dark") else "system"
+    url = "http://127.0.0.1:%d/?appearance=%s#%s" % (record["port"], appearance, record["token"])
     window = webview.create_window("便蹬宝", url, width=1120, height=790, min_size=(760, 560),
-                                   background_color="#F7F8FA", text_select=True)
+                                   background_color="#202226" if appearance == "dark" else "#F7F8FA", text_select=True)
     def smoke():
         result = {"passed": False}
         try:
             for _ in range(60):
                 time.sleep(.25)
-                result = window.evaluate_js("({passed: document.getElementById('health')?.textContent === '管理端已连接', width: innerWidth, height: innerHeight, title: document.title})")
+                result = window.evaluate_js("({passed: document.getElementById('health')?.textContent === '管理端已连接', width: innerWidth, height: innerHeight, title: document.title, theme: document.documentElement.dataset.theme})")
                 if result and result.get("passed"):
                     break
             Path(smoke_output).write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
@@ -112,7 +115,7 @@ def main():
     parser = argparse.ArgumentParser(description="便蹬宝管理端；所有脚本命令返回 JSON")
     parser.add_argument("command", nargs="?", default="gui", choices=[
         "gui", "serve", "status", "contexts", "start", "stop", "devices",
-        "revoke", "revoke-all", "account", "configure", "autostart", "check-update", "quit-manager"])
+        "revoke", "revoke-all", "account", "configure", "autostart", "appearance", "check-update", "quit-manager"])
     parser.add_argument("--config", type=Path, default=default_config())
     parser.add_argument("--yes", action="store_true", help="确认退出设备、停止服务或重启网关")
     parser.add_argument("--id", help="登录设备会话 ID")
@@ -120,6 +123,7 @@ def main():
     parser.add_argument("--password-stdin", action="store_true", help="从标准输入读取密码，不放入进程参数")
     parser.add_argument("--json-stdin", action="store_true", help="从标准输入读取设置 JSON")
     parser.add_argument("--enabled", choices=["true", "false"])
+    parser.add_argument("--mode", choices=["system", "light", "dark"], help="管理端外观")
     parser.add_argument("--output", type=Path, help="可选：将 JSON 结果写入指定文件")
     parser.add_argument("--smoke-gui", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -145,6 +149,10 @@ def main():
         if not isinstance(body, dict):
             parser.error("设置必须为 JSON 对象")
         body["confirmRestart"] = args.yes
+    elif args.command == "appearance":
+        if args.mode is None:
+            parser.error("appearance 需要 --mode system、light 或 dark")
+        body = {"mode": args.mode}
     elif args.command == "autostart":
         if args.enabled is None:
             parser.error("autostart 需要 --enabled true 或 false")

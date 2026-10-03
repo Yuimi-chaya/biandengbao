@@ -138,6 +138,14 @@ class Manager:
                 "callerThread": value.get("callerThread", os.environ.get("CODEX_THREAD_ID", os.environ.get("CODEX_SESSION_ID", ""))),
                 "network": value.get("network", {"mode": "lan"})}
 
+    def appearance(self):
+        try:
+            value = autostart.read_json(self.config.parent / ".manager/preferences.json") or {}
+            mode = value.get("appearance")
+            return mode if mode in ("system", "light", "dark") else "system"
+        except (OSError, ValueError, AttributeError):
+            return "system"
+
     def worker_alive(self):
         if self.child and self.child.poll() is None:
             return True
@@ -182,7 +190,7 @@ class Manager:
                 "username": config.get("auth", {}).get("username", "admin"),
                 "app": self.cached("app", 5, app_status), "gateway": gateway,
                 "worker": worker, "autostart": startup, "settings": self.options(),
-                "update": self.last_update}
+                "update": self.last_update, "appearance": self.appearance()}
 
     def validate_options(self, body):
         if set(body) - {"port", "codexHome", "callerThread", "network", "confirmRestart"}:
@@ -287,6 +295,12 @@ class Manager:
         if not self.lock.acquire(blocking=False):
             raise RuntimeError("另一项管理操作正在进行，请稍后再试")
         try:
+            if action == "appearance":
+                mode = body.get("mode")
+                if mode not in ("system", "light", "dark") or set(body) != {"mode"}:
+                    raise ValueError("外观仅支持 system、light 或 dark")
+                autostart.write_json(self.config.parent / ".manager/preferences.json", {"appearance": mode})
+                return {"appearance": mode}
             if action == "service/start":
                 return self.start()
             if action == "service/stop":

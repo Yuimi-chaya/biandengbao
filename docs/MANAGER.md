@@ -81,6 +81,7 @@ configure 保留未指定的端口、数据目录和调用上下文；--yes 在�
 | 全部退出 | revoke-all --yes |
 | 停网关 | stop --yes |
 | 关闭自启动 | autostart --enabled false |
+| 保存管理端深色外观 | appearance --mode dark |
 | 退出管理后台，保留网关 | quit-manager --yes |
 | 输出到文件 | 查询命令追加 --output 绝对文件路径 |
 

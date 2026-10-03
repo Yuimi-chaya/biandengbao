@@ -22,6 +22,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("binary", type=Path)
     parser.add_argument("--gui-binary", type=Path)
+    parser.add_argument("--online", action="store_true")
     args = parser.parse_args()
     binary = args.binary.resolve()
     flags = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
@@ -78,16 +79,19 @@ def main():
             assert phone("/api/login", {"username": "changed", "password": "another-synthetic-password"})[0] == 200
             cli("stop", "--yes")
             assert gateway.wait(timeout=8) == 0
+            cli("appearance", "--mode", "dark")
+            assert cli("status")["appearance"] == "dark"
+            update = cli("check-update") if args.online else None
             gui = None
             if args.gui_binary:
                 output = root / "gui-smoke.json"
                 result = subprocess.run([str(args.gui_binary.resolve()), "gui", "--config", str(config),
                     "--smoke-gui", "--output", str(output)], timeout=35, **flags)
                 gui = json.loads(output.read_text(encoding="utf-8"))
-                assert result.returncode == 0 and gui["passed"] and gui["width"] >= 700
+                assert result.returncode == 0 and gui["passed"] and gui["width"] >= 700 and gui["theme"] == "dark"
             print(json.dumps({"passed": True, "packagedVersion": status["manager"],
                 "deviceRevocation": True, "credentialRotation": True, "cooperativeStop": True,
-                "gui": gui, "realAppOperations": 0}, ensure_ascii=False))
+                "gui": gui, "onlineUpdate": update, "realAppOperations": 0}, ensure_ascii=False))
         finally:
             if gateway and gateway.poll() is None and read_record(root / "gateway-control.json"):
                 request_stop(root)

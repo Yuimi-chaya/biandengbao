@@ -176,6 +176,16 @@ class ManagerTests(unittest.TestCase):
         self.assertFalse(first.exists())
         Auth(value["auth"]).login(body["username"], body["password"], "local")
 
+    def test_appearance_survives_new_manager_and_rejects_other_fields(self):
+        self.manager.dispatch("appearance", {"mode": "dark"})
+        replacement = Manager(self.root, self.config)
+        self.assertEqual(replacement.appearance(), "dark")
+        self.assertFalse(self.config.exists())
+        for body in ({"mode": "anything"}, {"mode": "light", "password": "extra"}):
+            with self.assertRaises(ValueError):
+                self.manager.dispatch("appearance", body)
+        self.assertEqual(replacement.appearance(), "dark")
+
     def test_gateway_live_account_rotation_revokes_logins(self):
         auth = Auth({"mode": "none"})
         token, _ = auth.login("", "", "phone")
