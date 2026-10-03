@@ -28,9 +28,10 @@ const ThreadUI = (() => {
   }
   function compactionRecords(view) {
     const visible = new Map();
+    const pending = isCompacting(view);
     let run = [];
-    function flush(pending = false) {
-      if (run.length && !pending) {
+    function flush(hidden = false) {
+      if (run.length && !hidden && !(pending && run.some(item => item.active))) {
         const last = run.at(-1);
         if (!visible.has(last.turn)) visible.set(last.turn, new Map());
         visible.get(last.turn).set(last.index, run.length);
@@ -39,12 +40,12 @@ const ThreadUI = (() => {
     }
     for (const turn of view.turns || []) {
       for (const [index, message] of (turn.messages || []).entries()) {
-        if (message.kind === 'contextCompaction') run.push({ turn: turn.id, index });
-        else flush();
+        if (message.kind === 'contextCompaction') run.push({ turn: turn.id, index, active: message.status === 'inProgress' });
+        else if (message.role === 'activity' || message.text?.trim() || message.attachments?.length) flush();
       }
     }
     // The live indicator owns the trailing operation while it is pending.
-    flush(isCompacting(view));
+    flush(pending);
     return visible;
   }
   function finalMessage(turn) {

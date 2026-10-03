@@ -329,7 +329,9 @@ function renderTurn(turn,previous,options={}){
         group.classList.add('compaction-record');
         const count=rows.reduce((total,message)=>total+(message.compactionCount||1),0);
         const failed=rows.some(message=>['failed','interrupted'].includes(message.status));
-        heading.querySelector('.activity-label').textContent=failed?'上下文压缩未完成':'上下文已压缩';
+        const unsettled=rows.some(message=>message.status==='inProgress');
+        heading.querySelector('.activity-label').textContent=failed?'上下文压缩未完成':unsettled?'上下文压缩记录':'上下文已压缩';
+        if(unsettled)heading.append(el('span','compaction-caption','状态待同步'));
         if(count>1)heading.append(el('span','compaction-caption','连续 '+count+' 次记录'));
       }else{
         heading.append(el('span','activity-summary-count',String(rows.length)));

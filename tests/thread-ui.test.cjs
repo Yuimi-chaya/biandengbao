@@ -21,6 +21,9 @@ const compactView={turns:[{id:'a',messages:[{role:'assistant',text:'Done'},compa
 assert.equal(ui.compactionRecords(compactView).size,1);
 assert.equal(ui.compactionRecords(compactView).get('b').get(0),3);
 assert.equal(ui.compactionRecords({...compactView,compactionPending:true}).size,0);
+assert.equal(ui.compactionRecords({connected:true,status:'active',turns:[{id:'live',status:'inProgress',messages:[
+  {...compact,status:'inProgress'},{role:'activity',kind:'commandExecution'}]}]}).size,0);
+assert.equal(ui.compactionRecords({turns:[{id:'empty',status:'completed',messages:[compact,{role:'assistant',text:''},compact]}]}).get('empty').get(2),2);
 assert.equal(ui.compactionRecords({turns:[{id:'a',messages:[compact,{role:'user',text:'Next'},compact]}]}).get('a').size,2);
 assert.equal(ui.isCompacting({connected:false,status:'notLoaded',turns:[{status:'inProgress',messages:[{kind:'contextCompaction'}]}]}), false);
 assert.equal(ui.isCompacting({turns:[{status:'completed',messages:[{kind:'contextCompaction'}]}]}), false);
