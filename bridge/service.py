@@ -19,6 +19,9 @@ from .remote import AppHosts, RemoteStore, RemoteCatalog, RemoteUnavailable
 from .desktop_tools import DesktopTools
 from .uploads import Uploads
 
+CONNECTED_IDLE_TTL = 30 * 60
+MAX_IDLE_SESSIONS = 32
+
 
 def latest_prompt(state):
     for turn in reversed(ordered_turns(state or {})):
@@ -285,13 +288,17 @@ class Bridge:
         uuid.UUID(thread_id)
         with self.lock:
             session = self.live.get(thread_id)
+            if session:
+                with session.condition:
+                    session.touched = time.monotonic()
         if session is None:
             # SSH/SQLite reads must not block IPC events for other chats.
             meta = self.store.get(thread_id)
             with self.lock:
                 session = self.live.setdefault(thread_id, LiveSession(thread_id))
                 session.archived = bool(meta.get("archived"))
-        session.touched = time.monotonic()
+                with session.condition:
+                    session.touched = time.monotonic()
         if background:
             if attach:
                 self._refresh_async(session, force)
@@ -499,17 +506,40 @@ class Bridge:
                         pass  # Unknown outcomes stay recorded and are never automatically replayed.
                 if (session.viewers > 0 or queued) and not session.connected:
                     self._refresh_async(session)
-                elif session.viewers == 0 and not queued and time.monotonic() - session.touched > 300:
-                    with self.lock:
-                        if session.viewers != 0:
-                            continue
-                        self.live.pop(session.id, None)
-                    if session.connected:
-                        try:
-                            self.ipc.follow(session.id, session.owner, False, host=self.host)
-                        except IPCError:
-                            pass
+            self._trim_sessions()
             delay = 3 if self.ipc.client_id else min(30, delay * 2)
+
+    def _trim_sessions(self, now=None):
+        now = time.monotonic() if now is None else now
+        with self.submit_lock:
+            queued_ids = {key.split(":")[0] for key, value in self.submissions.items()
+                          if value["status"] == "queued"}
+        retired = []
+        with self.lock:
+            candidates = []
+            for session in self.live.values():
+                with session.condition:
+                    active = (session.state or {}).get("threadRuntimeStatus", {}).get("type") == "active"
+                    if (session.viewers or session.id in queued_ids or active or
+                            session.connecting or session.activating or session.compaction_pending):
+                        continue
+                    candidates.append(session)
+            candidates.sort(key=lambda session: session.touched)
+            excess = max(0, len(candidates) - MAX_IDLE_SESSIONS)
+            for index, session in enumerate(candidates):
+                with session.condition:
+                    ttl = CONNECTED_IDLE_TTL if session.connected else 300
+                    if index < excess or now - session.touched > ttl:
+                        self.live.pop(session.id, None)
+                        if session.connected:
+                            retired.append((session.id, session.owner))
+            # Pair removal/unfollow under the same lock so a returning viewer cannot
+            # attach a new session before its old subscription is removed.
+            for thread_id, owner in retired:
+                try:
+                    self.ipc.follow(thread_id, owner, False, host=self.host)
+                except IPCError:
+                    pass
 
     def _target(self, thread_id):
         session = self.session(thread_id)

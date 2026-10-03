@@ -32,6 +32,7 @@ STATIC = {"/": ("index.html", "text/html; charset=utf-8"),
           "/settings.js": ("settings.js", "text/javascript; charset=utf-8"),
           "/thread-ui.js": ("thread-ui.js", "text/javascript; charset=utf-8"),
           "/reading.js": ("reading.js", "text/javascript; charset=utf-8"),
+          "/connection.js": ("connection.js", "text/javascript; charset=utf-8"),
           "/workspace.css": ("workspace.css", "text/css; charset=utf-8"),
           "/vendor/marked.js": ("vendor/marked.js", "text/javascript; charset=utf-8"),
           "/vendor/purify.js": ("vendor/purify.js", "text/javascript; charset=utf-8"),
@@ -392,7 +393,7 @@ class Handler(BaseHTTPRequestHandler):
                     payload = json.dumps(view, ensure_ascii=False, separators=(",", ":"))
                     self.wfile.write(f"id: {sequence}\nevent: state\ndata: {payload}\n\n".encode())
                 else:
-                    self.wfile.write(b": heartbeat\n\n")
+                    self.wfile.write(b"event: heartbeat\ndata: {}\n\n")
                 self.wfile.flush()
                 bridge.closed.wait(0.2)
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, socket.timeout):

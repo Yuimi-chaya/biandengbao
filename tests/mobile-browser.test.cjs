@@ -10,6 +10,8 @@ const ID = '11111111-1111-4111-8111-111111111111';
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const output = process.env.MOBILE_UI_OUTPUT;
 const errors = [], sends = [], results = [];
+let authenticated = true, snapshotDelay = 0, snapshotReads = 0, eventStarts = 0, activations = 0;
+const streams = new Set();
 const fixture = {
   id: ID, title: '手机布局与输入稳定性合成验证', host: 'local', hostLabel: '此电脑', cwd: 'C:/Demo',
   connected: true, status: 'active', model: 'demo-codex', provider: 'synthetic', effort: 'high',
@@ -49,21 +51,38 @@ const server = http.createServer(async (request, response) => {
   try {
     const url = new URL(request.url, 'http://127.0.0.1');
     const json = data => { response.writeHead(200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify(data)); };
-    if (url.pathname === '/api/auth') return json({ authenticated: true, csrf: 'synthetic', passwordless: false, transport: 'sse' });
+    if (url.pathname === '/api/auth') return json({ authenticated, csrf: 'synthetic', passwordless: false, transport: 'sse' });
+    if (url.pathname === '/api/login') { authenticated = true; return json({ csrf: 'synthetic' }); }
+    if (!authenticated && url.pathname.startsWith('/api/')) {
+      response.writeHead(401, { 'Content-Type': 'application/json' });return response.end('{"error":"登录已过期"}');
+    }
     if (url.pathname === '/api/sessions') return json({ sessions, unavailableHosts: [] });
     if (url.pathname === '/api/contexts') return json({ contexts: [] });
     if (url.pathname.endsWith('/events')) {
+      eventStarts++;
+      const threadId = url.pathname.split('/')[3], host = url.searchParams.get('host') || 'local';
+      const view = { ...fixture, id: threadId, host, title: threadId === ID ? fixture.title : '另一条合成线程' };
       response.writeHead(200, { 'Content-Type': 'text/event-stream' });
-      response.write('event: state\ndata: ' + JSON.stringify(fixture) + '\n\n');
+      response.write('event: state\ndata: ' + JSON.stringify(view) + '\n\n');
+      streams.add(response);
+      const timer = setInterval(() => response.write('event: heartbeat\ndata: {}\n\n'), 1000);
+      response.on('close', () => { clearInterval(timer);streams.delete(response); });
       return;
     }
+    if (url.pathname.endsWith('/poll')) return json({ state: fixture });
+    if (url.pathname.endsWith('/activate')) { activations++;return json(fixture); }
     if (url.pathname.endsWith('/send')) {
       let body = '';
       for await (const chunk of request) body += chunk;
       sends.push(JSON.parse(body));
       return json({ status: 'sent' });
     }
-    if (url.pathname === '/api/sessions/' + ID) return json(fixture);
+    if (/^\/api\/sessions\/[0-9a-f-]{36}$/.test(url.pathname)) {
+      snapshotReads++;
+      if (snapshotDelay) await pause(snapshotDelay);
+      return json({ ...fixture, id: url.pathname.split('/')[3], host: url.searchParams.get('host') || 'local',
+        title: url.pathname.endsWith(ID) ? fixture.title : '另一条合成线程' });
+    }
     if (url.pathname.startsWith('/api/')) throw Error('Unexpected synthetic request: ' + request.url);
     const file = path.resolve(WEB, '.' + (url.pathname === '/' ? '/index.html' : url.pathname));
     if (!file.startsWith(WEB + path.sep)) throw Error('Invalid static path');
@@ -101,7 +120,89 @@ async function open(page, base) {
   if (output && page.viewportSize().width === 1366) await page.screenshot({ path: path.join(output, 'desktop-original.png') });
   await page.locator('.session').first().click();
   await page.waitForFunction(() => state?.connected && document.querySelectorAll('.turn').length === 2);
-  await page.evaluate(() => { events?.close(); events = null; streamGeneration++; });
+  await page.evaluate(() => { connection.stop(); });
+}
+async function recovery(page, base) {
+  await open(page, base);
+  await page.evaluate(() => resumePage(true));
+  await page.waitForFunction(() => transportReady);
+  await page.locator('#message').fill('息屏后保留的中文草稿');
+  const process = page.locator('[data-id=done] .turn-process');
+  await process.locator(':scope > summary').click();
+  await page.locator('#timeline').evaluate(node => { node.scrollTop = 120; });
+  const position = await page.locator('#timeline').evaluate(node => node.scrollTop);
+  const loads = snapshotReads;
+  await page.evaluate(id => openChat(id, 'local'), ID);
+  assert.equal(snapshotReads, loads, 'Selecting the current thread does not reopen its transport');
+  await page.locator('#back').click();
+  snapshotDelay = 350;
+  const reopening = page.evaluate(id => openChat(id, 'local'), ID);
+  await pause(80);
+  assert.equal(await page.locator('#chat-title').innerText(), fixture.title, 'Cached title is immediate');
+  check(await page.locator('.turn').count() === 2, 'Cached content remains visible during fresh read');
+  check(await process.evaluate(node => node.open), 'Disclosure survives reentry');
+  check(await page.locator('#send').isDisabled(), 'Cached state alone does not allow sending');
+  await reopening;
+  snapshotDelay = 0;
+  assert.equal(await page.locator('#message').inputValue(), '息屏后保留的中文草稿');
+  check(Math.abs(await page.locator('#timeline').evaluate(node => node.scrollTop) - position) < 3, 'Reading position survives reentry');
+  const readBeforeWake = snapshotReads, eventsBeforeWake = eventStarts;
+  await page.evaluate(() => {
+    window.syntheticHidden = true;
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => window.syntheticHidden });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  fixture.sequence++;
+  fixture.turns[1].messages.push({ id: 'wake-answer', role: 'assistant', kind: 'agentMessage',
+    text: '息屏期间完成的合成回复。' });
+  await pause(100);
+  await page.evaluate(() => {
+    window.syntheticHidden = false;
+    document.dispatchEvent(new Event('visibilitychange'));
+    window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+    window.dispatchEvent(new Event('focus'));
+  });
+  await page.waitForFunction(() => transportReady && state.turns[1].messages.some(message => message.id === 'wake-answer'));
+  await pause(200);
+  assert.equal(snapshotReads - readBeforeWake, 1, 'Wake lifecycle events are coalesced');
+  assert.equal(eventStarts - eventsBeforeWake, 1, 'Only one SSE channel after wake');
+  check(streams.size <= 1, 'Old channels are closed');
+  assert.equal(await page.locator('#message').inputValue(), '息屏后保留的中文草稿');
+  await page.context().setOffline(true);
+  await page.evaluate(() => window.dispatchEvent(new Event('offline')));
+  check(await page.locator('#send').isDisabled(), 'Offline send is disabled');
+  await page.context().setOffline(false);
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  await page.waitForFunction(() => transportReady);
+  const second = ID.replace(/^11111111/, '22222222');
+  await page.evaluate(async ({ id, second }) => {
+    await openChat(second, 'ssh/demo');
+    const old = openChat(id, 'local');
+    const newer = openChat(second, 'ssh/demo');
+    await Promise.all([old, newer]);
+  }, { id: ID, second });
+  await page.waitForFunction(() => transportReady && state.host === 'ssh/demo');
+  assert.equal(await page.evaluate(() => state.id), second, 'Rapid navigation cannot apply stale snapshots');
+  await page.evaluate(id => openChat(id, 'local'), ID);
+  authenticated = false;
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  await page.locator('#login').waitFor({ state: 'visible' });
+  await page.locator('#password').fill('synthetic-password');
+  await page.locator('#login-button').click();
+  await page.waitForFunction(() => transportReady && !document.getElementById('app').hidden);
+  assert.equal(await page.locator('#message').inputValue(), '息屏后保留的中文草稿', 'Expired login retains draft');
+  assert.equal(await page.locator('#composer').evaluate(node => getComputedStyle(node).borderTopWidth), '1px');
+  await page.evaluate(() => {
+    connection.stop();
+    const view=structuredClone(state);view.connected=false;view.activationRequired=true;view.canActivate=true;
+    renderState(view);
+  });
+  await page.waitForFunction(() => state.connected && !activatingKey);
+  assert.equal(activations, 1, 'A lost native owner is activated once after a previous successful connection');
+  if (output) await page.screenshot({ path: path.join(output, 'recovery-original.png') });
+  await page.evaluate(() => connection.stop());
+  fixture.turns[1].messages.pop();
+  results.push({ recovery: true, cachedReentry: true, offlineRecovery: true, expiredLogin: true, isolatedHost: true });
 }
 async function details(page) {
   const process = page.locator('[data-id=done] .turn-process');
@@ -327,13 +428,16 @@ async function typing(page, base) {
   let browser;
   try {
     browser = await chromium.launch({ channel: 'chrome', headless: true });
+    const recoveryContext = await browser.newContext({ viewport: { width: 390, height: 844 }, locale: 'zh-CN' });
+    try { await recovery(await recoveryContext.newPage(), base); }
+    finally { await recoveryContext.close(); }
     for (const viewport of [{ width: 390, height: 844 }, { width: 320, height: 568 }, { width: 1366, height: 900 }]) {
       const context = await browser.newContext({ viewport, locale: 'zh-CN', timezoneId: 'Asia/Shanghai' });
       try { await typing(await context.newPage(), base); }
       finally { await context.close(); }
     }
     assert.deepEqual(errors, []);
-    console.log(JSON.stringify({ results, syntheticSends: sends.length, errors }));
+    console.log(JSON.stringify({ results, syntheticSends: sends.length, syntheticActivations: activations, errors }));
   } finally {
     if (browser) await browser.close();
     server.closeAllConnections();

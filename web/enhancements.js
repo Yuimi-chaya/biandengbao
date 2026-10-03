@@ -352,7 +352,7 @@ const BridgeUI = (() => {
         if(key===currentKey())renderAttachments();
       }
     }catch(error){app.toast(error.message);}
-    finally{uploadCount--;$('attachment-status').hidden=true;$('attachment-input').value='';$('send').disabled=!app.getState()?.connected||app.isSending()||ThreadUI.isCompacting(app.getState()||{});latestButton();}
+    finally{uploadCount--;$('attachment-status').hidden=true;$('attachment-input').value='';$('send').disabled=!app.canSend()||!app.getState()?.connected||app.isSending()||ThreadUI.isCompacting(app.getState()||{});latestButton();}
   }
   function renderTurnNav(turns){
     const stamp=JSON.stringify(turns.map(turn=>[turn.id,turn.status,turn.messages.find(message=>message.role==='user')?.text?.slice(0,100)]));

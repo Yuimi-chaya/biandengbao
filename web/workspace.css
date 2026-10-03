@@ -45,6 +45,7 @@ button, summary, a { touch-action: manipulation; }
 .chat, .timeline, .composer { min-height: 0; }
 .chat-head, .notice, .composer { flex-shrink: 0; }
 .chat-head { border-bottom: 1px solid var(--line); }
+.composer { border-top: 1px solid var(--line); }
 .sidebar-head { border-bottom: 1px solid var(--line); margin-bottom: 12px; }
 .sidebar-foot { border-top: 1px solid var(--line); }
 .sessions, .app:not(.chat-open) .sessions { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
