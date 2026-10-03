@@ -301,8 +301,9 @@ def worker_lock(profile):
     profile.control.mkdir(parents=True, exist_ok=True)
     # Gateway lifecycle and attachment data are shared by the config directory.
     with (profile.config.parent / "autostart.lock").open("a+b") as lock:
-        lock.seek(0)
-        if lock.read(1) == b"":
+        # Windows byte locks also prohibit a competing reader of the sentinel.
+        lock.seek(0, os.SEEK_END)
+        if lock.tell() == 0:
             lock.write(b"0")
             lock.flush()
         lock.seek(0)

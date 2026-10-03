@@ -1,5 +1,6 @@
 """Shared entry points and installation ownership; synthetic fixtures only."""
 import sys
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,7 +10,7 @@ import configure
 import manager
 import run
 import stop
-from bridge.autostart import Profile, profile_from_settings, read_json, write_json
+from bridge.autostart import Profile, profile_from_settings, read_json, write_json, worker_lock
 from bridge.manager import Manager
 from bridge.service_profile import default_config
 
@@ -32,6 +33,23 @@ class SharedServiceTests(unittest.TestCase):
     def test_installation_paths_do_not_fork_new_service_identity(self):
         self.assertEqual(Profile(self.source, self.config).key,
                          Profile(self.root / "binary", self.config).key)
+
+    def test_competing_process_can_probe_an_occupied_lock_without_reading_it(self):
+        profile = Profile(self.source, self.config)
+        code = ("from pathlib import Path\nfrom types import SimpleNamespace\n"
+                "from bridge.autostart import worker_lock\nimport sys\n"
+                "p=SimpleNamespace(config=Path(sys.argv[1]),control=Path(sys.argv[2]))\n"
+                "with worker_lock(p) as acquired:\n print(acquired)\n")
+        with worker_lock(profile) as acquired:
+            self.assertTrue(acquired)
+            result = subprocess.run([sys.executable, "-B", "-c", code,
+                                     str(profile.config), str(profile.control)],
+                                    cwd=Path(__file__).resolve().parents[1], capture_output=True,
+                                    text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "False")
+        with worker_lock(profile) as acquired:
+            self.assertTrue(acquired)
 
     def save_owner(self, folder=None, launcher=None):
         folder = folder or self.config.parent / "autostart-0123456789ab"
