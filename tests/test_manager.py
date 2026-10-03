@@ -2,6 +2,7 @@ import http.client
 import json
 import os
 import plistlib
+import subprocess
 import tempfile
 import threading
 import time
@@ -240,6 +241,17 @@ class ManagerTests(unittest.TestCase):
 
 
 class MacStartupTests(unittest.TestCase):
+    def test_launchctl_timeout_is_actionable_and_never_replayed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            profile = Profile(home, home / "data/config.json")
+            with patch.object(Path, "home", return_value=home), patch.object(os, "getuid", return_value=501, create=True), \
+                    patch.object(macos_startup.subprocess, "run", side_effect=subprocess.TimeoutExpired("launchctl", 15)) as run:
+                with self.assertRaisesRegex(RuntimeError, "不要重复执行"):
+                    macos_startup.task(profile, "enable")
+                run.assert_called_once()
+            self.assertFalse((home / "Library/LaunchAgents").exists())
+
     def test_launchagent_is_local_and_retains_frozen_worker_arguments(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)

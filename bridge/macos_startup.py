@@ -18,8 +18,11 @@ def task(profile, mode):
     domain, target = "gui/" + str(os.getuid()), "gui/%d/%s" % (os.getuid(), label)
 
     def run(*args, check=True):
-        result = subprocess.run(["/bin/launchctl", *args], stdin=subprocess.DEVNULL,
-                                capture_output=True, text=True, timeout=15, check=False)
+        try:
+            result = subprocess.run(["/bin/launchctl", *args], stdin=subprocess.DEVNULL,
+                                    capture_output=True, text=True, timeout=15, check=False)
+        except subprocess.TimeoutExpired as error:
+            raise RuntimeError("macOS 登录项操作超时；请先查询状态，不要重复执行") from error
         if check and result.returncode:
             raise RuntimeError("macOS 登录项操作失败：" + result.stderr.strip()[:250])
         return result
