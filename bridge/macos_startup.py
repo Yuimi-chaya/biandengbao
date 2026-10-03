@@ -10,8 +10,9 @@ def task(profile, mode):
     label = "com.biandengbao.gateway." + profile.key
     folder = Path.home() / "Library/LaunchAgents"
     path = folder / (label + ".plist")
-    arguments = ([sys.executable, "--worker", str(profile.options)] if getattr(sys, "frozen", False) else
-                 [sys.executable, "-B", str(profile.worker), "--settings", str(profile.options)])
+    executable = profile.launcher["executable"]
+    arguments = ([executable, "--worker", str(profile.options)] if profile.launcher["kind"] == "packaged" else
+                 [executable, "-B", str(profile.worker), "--settings", str(profile.options)])
     previous = plistlib.loads(path.read_bytes()) if path.exists() else None
     if previous and (previous.get("Label") != label or previous.get("ProgramArguments") != arguments):
         raise RuntimeError("已有其他登录项使用此名称，未修改")

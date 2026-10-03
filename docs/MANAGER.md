@@ -91,13 +91,17 @@ configure 保留未指定的端口、数据目录和调用上下文；--yes 在�
 
 GUI 与 CLI 都调用 127.0.0.1 上的 POST /api/v1/操作名。请求使用 application/json 和独立的 Bearer 能力令牌。后台首次启动生成随机端口、令牌，记录在配置目录的 .manager/control.json；不要公开该文件、令牌或带令牌的日志。它与手机密码、模型 API key 无关。
 
-操作包括 status、contexts、devices、devices/revoke、devices/revoke-all、account、settings、service/start、service/stop、autostart 和 updates/check。参数和校验共用 bridge/manager.py、bridge/gateway_admin.py，不另设脚本专属配置副本。
+操作包括 status、contexts、devices、devices/revoke、devices/revoke-all、account、settings、service/start、service/stop、autostart、autostart/remove 和 updates/check。参数和校验共用 bridge/manager.py、bridge/gateway_admin.py，不另设脚本专属配置副本。
 
 接口校验 Host、Origin、能力令牌，拒绝跨站浏览器请求。手机登录不能获得管理权限；没有任意 shell、任意文件读取或远程下载安装接口。同一操作系统用户本来就能修改本机配置，因此它不是抵御本机账号失陷的边界。
 
 ## 配置与已有部署
 
 默认配置：Windows 为 %LOCALAPPDATA%/Biandengbao/config.json；Mac 为 ~/Library/Application Support/Biandengbao/config.json。构建产物不包含个人密码、聊天、App 认证或本机部署路径。
+
+源码 run.py、stop.py、configure.py 与管理端使用同一默认配置。不同安装目录的 CLI、GUI 和配置脚本会复用该配置的本机管理后台、网关与自启动任务；账号修改和设备解除登录作用于同一个网关。关闭任一管理窗口不停止服务。
+
+同一配置只保留一个自启动归属，继续使用已经保存的启动程序和连接选项，不因打开另一份源码或二进制再注册任务。旧版本按安装目录命名的单套任务会沿用；发现同配置已有多套记录时拒绝创建新任务，需先停用旧归属。安装目录必须保留，移动前仍需从原安装停用/移除自启动。
 
 已有源码部署可在所有命令追加同一个 --config 绝对路径，复用已有网关账号。**先停止旧网关和旧监听程序，再升级或切换到二进制；不要让两套自启动管理同一端口。**管理端不会默默迁移其他目录的任务或接管未知服务。旧版缺少本机管理接口时会明确提示升级，不会伪造设备列表。
 

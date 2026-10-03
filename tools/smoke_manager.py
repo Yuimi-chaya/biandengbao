@@ -66,6 +66,19 @@ def main():
                 if gateway.poll() is not None or time.monotonic() > deadline:
                     raise RuntimeError("Packaged test gateway did not become ready")
                 time.sleep(.1)
+            manager_record = read_record(root / ".manager/control.json")
+            source = subprocess.run([sys.executable, "-B", str(ROOT / "manager.py"),
+                "status", "--config", str(config)], capture_output=True, encoding="utf-8",
+                errors="replace", timeout=35, **flags)
+            assert source.returncode == 0, source.stderr[-700:]
+            assert json.loads(source.stdout)["result"]["gateway"]["pid"] == gateway.pid
+            assert read_record(root / ".manager/control.json") == manager_record
+            duplicate = subprocess.run([sys.executable, "-B", str(ROOT / "run.py"),
+                "--config", str(config), "--port", str(port), "--codex-home", str(root / "no-codex-data"),
+                "--ipc-path", ipc], capture_output=True, encoding="utf-8", errors="replace",
+                timeout=15, **flags)
+            assert duplicate.returncode == 0, duplicate.stderr[-700:]
+            assert read_record(root / "gateway-control.json")["pid"] == gateway.pid
             first = phone("/api/login", {"username": "smoke", "password": "synthetic-password-123"})
             assert first[0] == 200
             devices = cli("devices")
@@ -77,6 +90,28 @@ def main():
             cli("account", "--username", "changed", "--password-stdin", "--yes", input="another-synthetic-password\n")
             assert phone("/api/auth", cookie=second[2])[1]["authenticated"] is False
             assert phone("/api/login", {"username": "changed", "password": "another-synthetic-password"})[0] == 200
+            cli("stop", "--yes")
+            assert gateway.wait(timeout=8) == 0
+            gateway = subprocess.Popen([sys.executable, "-B", str(ROOT / "run.py"),
+                "--config", str(config), "--port", str(port),
+                "--codex-home", str(root / "no-codex-data"), "--ipc-path", ipc],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **flags)
+            deadline = time.monotonic() + 15
+            while True:
+                record = read_record(root / "gateway-admin.json")
+                if record and record["pid"] == gateway.pid:
+                    break
+                if gateway.poll() is not None or time.monotonic() > deadline:
+                    raise RuntimeError("Source-first shared test gateway did not become ready")
+                time.sleep(.1)
+            assert cli("status")["gateway"]["pid"] == gateway.pid
+            assert phone("/api/login", {"username": "changed", "password": "another-synthetic-password"})[0] == 200
+            assert len(cli("devices")) == 1
+            duplicate = subprocess.run([str(binary), "--gateway", "--config", str(config),
+                "--port", str(port), "--codex-home", str(root / "no-codex-data"), "--ipc-path", ipc],
+                capture_output=True, encoding="utf-8", errors="replace", timeout=15, **flags)
+            assert duplicate.returncode == 0, duplicate.stderr[-700:]
+            assert read_record(root / "gateway-control.json")["pid"] == gateway.pid
             cli("stop", "--yes")
             assert gateway.wait(timeout=8) == 0
             cli("appearance", "--mode", "dark")
@@ -98,6 +133,8 @@ def main():
                 assert result.returncode == 0 and gui["passed"] and gui["width"] >= 700 and gui["theme"] == "dark", gui
             print(json.dumps({"passed": True, "packagedVersion": status["manager"],
                 "deviceRevocation": True, "credentialRotation": True, "cooperativeStop": True,
+                "sourceBinarySharedBackend": True, "bothGatewayStartOrders": True,
+                "duplicateGatewayPrevented": True,
                 "gui": gui, "onlineUpdate": update, "realAppOperations": 0}, ensure_ascii=False))
         finally:
             if gateway and gateway.poll() is None and read_record(root / "gateway-control.json"):

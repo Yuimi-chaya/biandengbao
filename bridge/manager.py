@@ -18,16 +18,7 @@ from .local_control import rpc
 from .network import validate_network
 from .store import SessionStore
 from .version import VERSION, REVISION, REPOSITORY
-
-
-def default_config():
-    if sys.platform == "win32":
-        root = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData/Local")))
-    elif sys.platform == "darwin":
-        root = Path.home() / "Library/Application Support"
-    else:
-        root = Path.home() / ".local/share"
-    return root / "Biandengbao/config.json"
+from .service_profile import default_config
 
 
 def runner(root, mode, *args):
@@ -204,7 +195,8 @@ class Manager:
         if not isinstance(value["callerThread"], str) or len(value["callerThread"]) > 100:
             raise ValueError("调用上下文格式不正确")
         value["network"] = validate_network(value["network"], require_binary=True)
-        return {"schema": 1, "repository": str(self.root), "config": str(self.config), **value}
+        return {"schema": 1, "repository": str(self.profile.root), "config": str(self.config),
+                "launcher": self.profile.launcher, **value}
 
     def pause_worker(self):
         self.profile.control.mkdir(parents=True, exist_ok=True)
@@ -233,8 +225,12 @@ class Manager:
         self.profile.control.mkdir(parents=True, exist_ok=True)
         autostart.write_json(self.profile.options, options)
         self.profile.disabled.unlink(missing_ok=True)
-        self.child = spawn(runner(self.root, "--worker", self.profile.options),
-                           self.root, self.profile.control / "manager-worker.log")
+        command = [self.profile.launcher["executable"]]
+        if self.profile.launcher["kind"] == "source":
+            command += ["-B", str(self.profile.root / "autostart.py"), "--settings", str(self.profile.options)]
+        else:
+            command += ["--worker", str(self.profile.options)]
+        self.child = spawn(command, self.profile.root, self.profile.control / "manager-worker.log")
         return {"state": "waiting_for_app", "supervisorPid": self.child.pid}
 
     def stop(self):
@@ -337,6 +333,12 @@ class Manager:
                         self.profile.task("start")
                 else:
                     self.profile.disable()
+                self.cache.pop("startup", None)
+                return self.profile.status()
+            if action == "autostart/remove":
+                if body.get("confirm") is not True:
+                    raise ValueError("请确认移除登录自启动")
+                self.profile.remove()
                 self.cache.pop("startup", None)
                 return self.profile.status()
             if action == "updates/check":

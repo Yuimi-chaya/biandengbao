@@ -72,7 +72,7 @@
 
 先阅读 [管理端安装与脚本接管](docs/MANAGER.md)。发布包未签名或公证；macOS 原生 App 绑定及各平台自启动仍需实机验收。已有部署切换前，先正常停止旧网关和旧自启动监听，避免两套服务。
 
-Windows 旧 `Biandengbao-LAN` 自启动与管理端占用同一端口时，可使用[迁移脚本](docs/STARTUP-MIGRATION.md)预检、备份和交接，保留管理端账号设置，无需重编译。
+源码与管理端默认共用同一份用户配置、账号、网关和自启动任务；启动任一入口后，另一入口读取并管理已有服务，不重复启动。Windows 旧 `Biandengbao-LAN` 安装仍使用独立配置时，可使用[迁移脚本](docs/STARTUP-MIGRATION.md)预检、备份和交接。
 
 ### 源码部署
 
@@ -106,7 +106,9 @@ cd biandengbao
 python3 -B "$PWD/run.py" --lan
 ```
 
-手机连同一局域网，打开终端显示的电脑 IP 地址。账号默认 `admin`，随机密码在 `.local/首次登录.txt`。保持启动终端运行；Windows 防火墙只按需允许专用网络。如果没有 `py`，改用 `python`。
+手机连同一局域网，打开终端显示的电脑 IP 地址。首次源码部署的账号默认 `admin`，随机密码在配置旁的 `首次登录.txt`；Windows 默认配置目录为 `%LOCALAPPDATA%\Biandengbao`，Mac 为 `~/Library/Application Support/Biandengbao`。已经在管理端设置过账号时沿用该账号，不生成第二套密码。手动网关需保持终端运行；已有网关时会复用，不重复启动。如果没有 `py`，改用 `python`。
+
+旧源码安装的 `.local/config.json` 不会被静默覆盖或迁移。继续使用旧配置时，启停和管理端都显式传入同一个 `--config` 绝对路径；切换到默认共享服务时先停旧自启动和网关。Windows 防火墙按需允许可信网络。
 
 停止用另一个终端运行 `py -3 -B .\stop.py`（macOS：`python3 -B stop.py`）；再次启动用上面的命令。自定义 `--config` 时启停都要传同一路径。改密码前先停止，再运行 `run.py --set-password`。重启服务后需要重新登录。
 

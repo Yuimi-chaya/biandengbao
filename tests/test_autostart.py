@@ -136,11 +136,11 @@ class AutostartTests(unittest.TestCase):
         self.assertFalse(self.profile.control.exists())
         self.task.assert_called_once_with("status")
 
-    def test_profiles_separate_configs_and_installations(self):
+    def test_profiles_separate_configs_but_share_installation_identity(self):
         other = autostart.Profile(self.root, self.root / ".local/other.json")
         moved = autostart.Profile(self.root.parent / "other repo", self.config)
         self.assertNotEqual(self.profile.task_name, other.task_name)
-        self.assertNotEqual(self.profile.task_name, moved.task_name)
+        self.assertEqual(self.profile.task_name, moved.task_name)
         self.assertEqual(self.profile.task_name,
                          autostart.Profile(self.root, self.config).task_name)
 

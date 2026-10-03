@@ -13,6 +13,7 @@ from bridge import autostart
 from bridge.lifecycle import read_record
 from bridge.local_control import LocalServer, rpc
 from bridge.manager import Manager, default_config, runner, spawn
+from bridge.service_profile import same_config
 
 ROOT = Path(__file__).resolve().parent
 
@@ -66,8 +67,8 @@ def connect(config):
         except (OSError, ValueError, RuntimeError):
             identity = None
         if identity:
-            if identity != {"root": str(ROOT), "config": str(config)}:
-                raise RuntimeError("另一份安装正在管理此配置；请先退出该管理端后台，不会自动接管")
+            if not same_config(identity.get("config", ""), config):
+                raise RuntimeError("管理后台配置归属不匹配；不会自动接管")
             return record
     process = spawn(runner(ROOT, "serve", "--config", config), ROOT,
                     config.parent / ".manager/manager.log")
@@ -76,7 +77,8 @@ def connect(config):
         record = read_record(path)
         if record:
             try:
-                if rpc(record, "identity", timeout=.5) == {"root": str(ROOT), "config": str(config)}:
+                identity = rpc(record, "identity", timeout=.5)
+                if same_config(identity.get("config", ""), config):
                     return record
             except (OSError, ValueError, RuntimeError):
                 pass

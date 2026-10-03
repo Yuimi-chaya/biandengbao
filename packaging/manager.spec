@@ -10,6 +10,8 @@ icon = os.environ["BDB_BUILD_ICON"]
 datas = [(str(root / "web"), "web"), (str(root / "manager-web"), "manager-web"),
          (str(root / "tools/configure-autostart.ps1"), "tools"),
          (str(root / "LICENSE"), "."), (str(root / "docs/MANAGER.md"), "docs"),
+         (str(root / "docs/AUTOSTART.md"), "docs"),
+         (str(root / "docs/STARTUP-MIGRATION.md"), "docs"),
          (str(root / "packaging/THIRD_PARTY.md"), "."),
          (str(metadata), ".")]
 datas += copy_metadata("pywebview", recursive=True)

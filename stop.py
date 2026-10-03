@@ -4,12 +4,12 @@ import argparse
 from pathlib import Path
 
 from bridge.lifecycle import request_stop
+from bridge.service_profile import default_config
 
 
 def main():
-    root = Path(__file__).resolve().parent
     parser = argparse.ArgumentParser(description='Stop this Codex mobile gateway')
-    parser.add_argument('--config', type=Path, default=root / '.local/config.json')
+    parser.add_argument('--config', type=Path, default=default_config())
     args = parser.parse_args()
     try:
         request_stop(args.config.parent)

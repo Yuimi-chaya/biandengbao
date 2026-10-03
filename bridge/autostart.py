@@ -16,6 +16,7 @@ else:
     from . import windows_app
 from .lifecycle import request_stop
 from .network import network_arguments, validate_network
+from .service_profile import same_config
 
 
 def supported():
@@ -44,8 +45,47 @@ class Profile:
     def __init__(self, root, config):
         self.root = Path(root).resolve()
         self.config = Path(config).resolve()
-        identity = os.path.normcase(str(self.root) + "\0" + str(self.config))
+        identity = os.path.normcase(str(self.config))
         self.key = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:12]
+        candidates = []
+        for folder in self.config.parent.glob("autostart-*"):
+            suffix = folder.name.removeprefix("autostart-")
+            if len(suffix) != 12 or any(char not in "0123456789abcdef" for char in suffix):
+                continue
+            options = read_json(folder / "options.json")
+            if (isinstance(options, dict) and options.get("schema") == 1 and not options.get("retired")
+                    and isinstance(options.get("config"), str)
+                    and same_config(options["config"], self.config)):
+                candidates.append((suffix, options))
+        if len(candidates) > 1:
+            raise RuntimeError("同一服务配置有多套自启动记录；请先停用旧安装，不会创建第三套")
+        self.launcher = None
+        if candidates:
+            # Preserve an existing task's owner, including older root-based names.
+            self.key, options = candidates[0]
+            repository = options.get("repository")
+            if not isinstance(repository, str) or not Path(repository).is_absolute():
+                raise RuntimeError("已有自启动安装归属无效")
+            self.root = Path(repository).resolve()
+            self.launcher = options.get("launcher")
+            if self.launcher is None:
+                packaged = (self.root.parent / "Biandengbao.exe" if self.root.name == "_internal"
+                            else self.root.parent / "MacOS/Biandengbao")
+                if packaged.is_file():
+                    self.launcher = {"kind": "packaged", "executable": str(packaged)}
+                elif not getattr(sys, "frozen", False) or self.root == Path(root).resolve():
+                    self.launcher = {"kind": "packaged" if getattr(sys, "frozen", False) else "source",
+                                     "executable": str(Path(sys.executable).resolve())}
+                else:
+                    raise RuntimeError("旧源码自启动缺少启动程序记录；请从原安装停用或迁移")
+        if self.launcher is None:
+            self.launcher = {"kind": "packaged" if getattr(sys, "frozen", False) else "source",
+                             "executable": str(Path(sys.executable).resolve())}
+        if (not isinstance(self.launcher, dict)
+                or self.launcher.get("kind") not in ("source", "packaged")
+                or not isinstance(self.launcher.get("executable"), str)
+                or not Path(self.launcher["executable"]).is_absolute()):
+            raise RuntimeError("服务启动程序记录无效")
         self.task_name = "Biandengbao-LAN-" + self.key
         self.control = self.config.parent / ("autostart-" + self.key)
         self.options = self.control / "options.json"
@@ -53,9 +93,9 @@ class Profile:
         self.worker = self.root / "autostart.py"
 
     def pythonw(self):
-        if getattr(sys, "frozen", False):
-            return Path(sys.executable)
-        path = Path(sys.executable).with_name("pythonw.exe")
+        if self.launcher["kind"] == "packaged":
+            return Path(self.launcher["executable"])
+        path = Path(self.launcher["executable"]).with_name("pythonw.exe")
         if not path.is_file():
             raise RuntimeError("当前 Python 安装缺少 pythonw.exe；未配置自启动")
         return path
@@ -74,7 +114,7 @@ class Profile:
                 "-Mode", mode, "-TaskName", self.task_name,
                 "-Pythonw", str(self.pythonw()), "-Worker", str(self.worker),
                 "-SettingsPath", str(self.options)] +
-                (["-Packaged"] if getattr(sys, "frozen", False) else []),
+                (["-Packaged"] if self.launcher["kind"] == "packaged" else []),
                 stdin=subprocess.DEVNULL, capture_output=True, encoding="utf-8",
                 errors="replace", timeout=30, check=False,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -112,7 +152,7 @@ class Profile:
         if state.get("state") == "Running":
             raise RuntimeError("自启动任务仍在运行；请先关闭，待退出后再修改配置")
         value = {"schema": 1, "repository": str(self.root),
-                 "config": str(self.config), "port": port,
+                 "config": str(self.config), "port": port, "launcher": self.launcher,
                  "codexHome": str(Path(codex_home or previous.get("codexHome") or
                      os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).resolve()),
                  "callerThread": caller.strip()}
@@ -146,6 +186,9 @@ class Profile:
                 raise RuntimeError("等待程序尚未退出；自启动已关闭，稍后再移除")
             time.sleep(.5)
         self.task("remove")
+        options = read_json(self.options)
+        if isinstance(options, dict):
+            write_json(self.options, {**options, "retired": True})
         # Keep options/status for diagnosis, but leave the disable marker.
         return self.status()
 
@@ -178,6 +221,8 @@ def profile_from_settings(root, settings):
             not Path(value["config"]).is_absolute()):
         raise RuntimeError("缺少自启动配置")
     profile = Profile(root, value["config"])
+    if profile.root != Path(root).resolve():
+        raise RuntimeError("监听程序不属于保存的服务安装；不会更改归属")
     if settings != profile.options:
         raise RuntimeError("自启动配置文件不属于当前安装")
     profile.load_options()
@@ -209,8 +254,10 @@ def launch(profile, options, binding):
         raise RuntimeError("自启动已关闭或同配置目录已有服务；未启动进程")
     if not windows_app.binding_alive(binding):
         raise RuntimeError("App 连接已变化；未启动进程")
-    packaged = getattr(sys, "frozen", False)
-    python = Path(sys.executable) if packaged or os.name != "nt" else Path(sys.executable).with_name("python.exe")
+    packaged = profile.launcher["kind"] == "packaged"
+    python = Path(profile.launcher["executable"])
+    if not packaged and os.name == "nt":
+        python = python.with_name("python.exe")
     if not python.is_file() or (not packaged and not (profile.root / "run.py").is_file()):
         raise RuntimeError("Python 或安装目录缺失；未启动进程")
     environment = os.environ.copy()

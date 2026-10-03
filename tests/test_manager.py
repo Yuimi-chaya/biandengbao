@@ -309,6 +309,7 @@ class MacStartupTests(unittest.TestCase):
             with patch.object(Path, "home", return_value=home), patch.object(os, "getuid", return_value=501, create=True), \
                     patch.object(macos_startup.sys, "frozen", True, create=True), \
                     patch.object(macos_startup.subprocess, "run", return_value=Mock(returncode=0, stdout="state = waiting", stderr="")) as run:
+                profile = Profile(home, home / "data/config.json")
                 macos_startup.task(profile, "enable")
             path = next((home / "Library/LaunchAgents").glob("*.plist"))
             value = plistlib.loads(path.read_bytes())
