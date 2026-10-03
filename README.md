@@ -64,11 +64,15 @@
 
 ## 安装使用
 
-### 桌面管理端（候选版）
+### 桌面管理端
 
-Release 候选包提供 Windows x64、Apple Silicon、Intel Mac 管理端，内置运行环境。可查看 App/网关状态与版本、设置网关账号、解除设备登录、选择局域网/临时 HTTPS/已有域名，并按保存的连接模式启用登录自启动。支持深浅色，另有共用后端的 JSON CLI 和仅本机管理接口。
+下载 v0.2.0：[Windows x64](https://github.com/Yuimi-chaya/biandengbao/releases/download/v0.2.0/Biandengbao-0.2.0-Windows-x64.zip) · [Apple Silicon Mac](https://github.com/Yuimi-chaya/biandengbao/releases/download/v0.2.0/Biandengbao-0.2.0-macOS-arm64.zip) · [Intel Mac](https://github.com/Yuimi-chaya/biandengbao/releases/download/v0.2.0/Biandengbao-0.2.0-macOS-x64.zip)。完整目录解压使用，不需要另装 Python；[Release 页面](https://github.com/Yuimi-chaya/biandengbao/releases/tag/v0.2.0)提供 SHA-256 校验文件。
 
-先阅读 [管理端安装与脚本接管](docs/MANAGER.md)。候选包未签名；macOS 原生 App 绑定及各平台自启动仍需实机验收。以下是无需管理端的源码安装方式。
+管理端可查看 App/网关状态与版本、设置网关账号、解除设备登录、选择局域网/临时 HTTPS/已有域名，并按保存的连接模式启用登录自启动。支持深浅色，另有共用后端的 JSON CLI 和仅本机管理接口。
+
+先阅读 [管理端安装与脚本接管](docs/MANAGER.md)。发布包未签名或公证；macOS 原生 App 绑定及各平台自启动仍需实机验收。已有部署切换前，先正常停止旧网关和旧自启动监听，避免两套服务。
+
+### 源码部署
 
 需要 **Windows 10/11 或 macOS、Python 3.9+、正在运行的 Codex App**。网关只用 Python 标准库，前端资源随仓库提供，不用 `pip install` 或 `npm install`。
 

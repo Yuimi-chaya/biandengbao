@@ -7,7 +7,7 @@
 - **Windows x64**：解压完整目录，双击 Biandengbao.exe。不要单独移动 exe；Biandengbao-CLI.exe 和 _internal 也要保留。需要 Windows 10/11、.NET Framework 4.8 和 Edge WebView2 Runtime。缺失时按微软官方指引安装，管理端不静默安装系统组件。
 - **Apple Silicon / Intel Mac**：分别下载 macOS-arm64 / macOS-x64 包，解压后把 Biandengbao.app 放到 Applications 再打开。
 
-当前候选包未进行 Windows 代码签名或 Apple Developer ID 签名、公证，可能被 SmartScreen 或 Gatekeeper 拦截。确认下载源后，可在系统提供的安全提示中允许此次运行；不要关闭系统整体安全保护。macOS 可在“系统设置 → 隐私与安全性”处理被阻止的 App。
+当前发布包未进行 Windows 代码签名或 Apple Developer ID 签名、公证，可能被 SmartScreen 或 Gatekeeper 拦截。确认下载源后，可在系统提供的安全提示中允许此次运行；不要关闭系统整体安全保护。macOS 可在“系统设置 → 隐私与安全性”处理被阻止的 App。
 
 管理端内置 Python 和界面依赖，不需要另装 Python。Codex App、模型额度或 API 配置仍由你自己的 App 提供。
 Windows 自动发现当前适配 Store 版 Codex App；其他分发方式可能需要进一步适配。
