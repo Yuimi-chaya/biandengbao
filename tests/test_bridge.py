@@ -484,6 +484,22 @@ class HttpTests(unittest.TestCase):
         self.assertIn('HttpOnly', headers['Set-Cookie'])
         return {'Cookie': headers['Set-Cookie'].split(';')[0], 'X-CSRF-Token': body['csrf']}
 
+    def completed_poll(self, path, headers):
+        from unittest.mock import patch
+        finished = threading.Event()
+        handler = self.server.RequestHandlerClass
+        original = handler.poll
+        def poll(*args, **kwargs):
+            try:
+                return original(*args, **kwargs)
+            finally:
+                finished.set()
+        # Reading Content-Length bytes can finish before the server's finally block.
+        with patch.object(handler, 'poll', poll):
+            response = self.request('GET', path, headers=headers)
+            self.assertTrue(finished.wait(3), 'Poll handler did not release its viewer')
+        return response
+
     def test_startup_does_not_require_reverse_dns(self):
         from unittest.mock import patch
         config = {'auth': {'mode': 'none'}, 'origins': []}
@@ -535,7 +551,7 @@ class HttpTests(unittest.TestCase):
         self.server.bridge.view = lambda *a, **k: session.view()
         self.assertEqual(self.request('GET', '/api/sessions/'+THREAD+'/poll?after=-1')[0], 401)
         auth = self.login()
-        status, _, value = self.request('GET', '/api/sessions/'+THREAD+'/poll?after=-1', headers=auth)
+        status, _, value = self.completed_poll('/api/sessions/'+THREAD+'/poll?after=-1', auth)
         self.assertEqual(status, 200)
         self.assertEqual(value['state']['id'], THREAD)
         self.assertEqual(session.viewers, 0)
@@ -552,7 +568,7 @@ class HttpTests(unittest.TestCase):
         self.server.bridge.session = lambda *a, **k: session
         self.server.bridge.view = lambda *a, **k: session.view()
         auth = self.login()
-        status, _, value = self.request('GET', '/api/sessions/'+THREAD+'/poll?after=0&sync=retired-session', headers=auth)
+        status, _, value = self.completed_poll('/api/sessions/'+THREAD+'/poll?after=0&sync=retired-session', auth)
         self.assertEqual(status, 200)
         self.assertEqual(value['state']['syncId'], session.sync_id)
         self.assertEqual(value['state']['sequence'], 0)
