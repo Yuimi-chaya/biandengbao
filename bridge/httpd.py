@@ -273,7 +273,7 @@ class Handler(BaseHTTPRequestHandler):
                         thread_id, before=query.get("before", [None])[0],
                         turn_id=query.get("turn", [None])[0], message_id=query.get("message", [None])[0]))
                 if action == "poll":
-                    return self.poll(bridge, thread_id, int(query.get("after", ["-1"])[0]))
+                    return self.poll(bridge, thread_id, int(query.get("after", ["-1"])[0]), query.get("sync", [None])[0])
                 if action == "events":
                     return self.stream(bridge, thread_id, delta=query.get("delta") == ["true"])
                 return self.output(404, {"error": "接口不存在"})
@@ -354,17 +354,18 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def poll(self, bridge, thread_id, after):
+    def poll(self, bridge, thread_id, after, sync_id=None):
         session = bridge.session(thread_id, background=True)
         with session.condition:
             session.viewers += 1
         try:
             with session.condition:
-                session.condition.wait_for(lambda: session.sequence != after or bridge.closed.is_set(), timeout=12)
-                changed = session.sequence != after
+                changed = lambda: session.sequence != after or (sync_id is not None and sync_id != session.sync_id)
+                session.condition.wait_for(lambda: changed() or bridge.closed.is_set(), timeout=12)
+                updated = changed()
             if not self.authorized():
                 return
-            self.output(200, {"state": bridge.view(thread_id, attach=False, background=True) if changed else None})
+            self.output(200, {"state": bridge.view(thread_id, attach=False, background=True) if updated else None})
         finally:
             with session.condition:
                 session.viewers -= 1

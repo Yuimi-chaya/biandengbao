@@ -9,10 +9,12 @@ let stopTarget=null;
 const catalogCache=new Map(), sessionNodes=new Map(), groupNodes=new Map();
 const seenTurns=new Map();
 const renderStamps=new WeakMap();
+const turnStamps=new WeakMap();
 const chatCache=new Map();
 let olderTurns=new Map(), historyCursor=null, gapCursor=null, historyBusy=false, historyAbort=null;
 const detailReads=new Map();
-let historyRetryAt=0;
+let historyRetryAt=0,historyRetryTimer=0,historyRetryCount=0;
+function resetHistoryRetry(){clearTimeout(historyRetryTimer);historyRetryTimer=0;historyRetryAt=0;historyRetryCount=0;}
 let transportReady=false, suspended=false, wakeTimer=0;
 function chatKey(id=currentId,host=currentHost){return host+'|'+id;}
 function sessionUrl(id,action='',host=currentHost){return '/api/sessions/'+id+(action?'/'+action:'')+'?host='+encodeURIComponent(host);}
@@ -40,7 +42,7 @@ async function api(path,body,readOptions={}){
   }catch(error){if(timedOut)throw Error('读取超时，正在等待网络恢复');throw error;}
   finally{clearTimeout(timer);readOptions.signal?.removeEventListener('abort',cancel);}
 }
-function showLogin(passwordless=false){saveDraft();rememberChat();connection.stop();transportReady=false;ReadingUI.reset();document.querySelectorAll('dialog[open]').forEach(d=>d.close());$('app').hidden=true;$('login').hidden=false;$('credentials').hidden=passwordless;$('noauth').hidden=!passwordless;$('username').required=!passwordless;$('password').required=!passwordless;$('password').value='';}
+function showLogin(passwordless=false){saveDraft();rememberChat();connection.stop();resetHistoryRetry();historyAbort?.abort();detailReads.clear();historyBusy=false;transportReady=false;ReadingUI.reset();document.querySelectorAll('dialog[open]').forEach(d=>d.close());$('app').hidden=true;$('login').hidden=false;$('credentials').hidden=passwordless;$('noauth').hidden=!passwordless;$('username').required=!passwordless;$('password').required=!passwordless;$('password').value='';}
 async function start(){const auth=await api('/api/auth');transport=auth.transport||'sse';if(!auth.authenticated){showLogin(auth.passwordless);return;}csrf=auth.csrf;await enter();}
 async function enter(){$('login').hidden=true;$('app').hidden=false;const list=loadList(true).catch(e=>toast(e.message));const [id,host='local']=location.hash.slice(1).split('~');if(/^[0-9a-f-]{36}$/.test(id))await openChat(id,decodeURIComponent(host));await list;}
 $('login-form').addEventListener('submit',async event=>{event.preventDefault();$('login-button').disabled=true;$('login-error').textContent='';try{const result=await api('/api/login',{username:$('username').value,password:$('password').value});csrf=result.csrf;$('password').value='';await enter();}catch(error){$('login-error').textContent=error.message;}finally{$('login-button').disabled=false;}});
@@ -141,7 +143,7 @@ const connection=ConnectionUI.create({
   visible:()=>!document.hidden&&!$('app').hidden&&$('app').classList.contains('chat-open'),
   url:target=>sessionUrl(target.id,'events',target.host)+'&delta=true',
   snapshot:(target,signal)=>api(sessionUrl(target.id,'',target.host),undefined,{signal}),
-  poll:(target,after,signal)=>api(sessionUrl(target.id,'poll',target.host)+'&after='+after,undefined,{signal,timeout:20000}),
+  poll:(target,after,signal,syncId)=>api(sessionUrl(target.id,'poll',target.host)+'&after='+after+(syncId?'&sync='+encodeURIComponent(syncId):''),undefined,{signal,timeout:20000}),
   onState:view=>{transportReady=true;renderState(view,!state);},
   onLogout:()=>showLogin(),
   onStatus:status=>{
@@ -155,12 +157,13 @@ const connection=ConnectionUI.create({
 });
 async function openChat(id,host="local"){
   if(id===currentId&&host===currentHost&&$('app').classList.contains('chat-open')&&state){
+    if(historyAbort?.signal.aborted){historyAbort=new AbortController();detailReads.clear();}
     if(!connection.matches({id,host}))await connection.start({id,host,transport});
     return;
   }
   document.querySelectorAll('dialog[open]').forEach(d=>d.close());
   saveDraft();rememberChat();connection.stop();BridgeUI.resetChat();transportReady=false;
-  historyAbort?.abort();historyAbort=new AbortController();historyBusy=false;olderTurns=new Map();historyCursor=null;gapCursor=null;detailReads.clear();
+  resetHistoryRetry();historyAbort?.abort();historyAbort=new AbortController();historyBusy=false;olderTurns=new Map();historyCursor=null;gapCursor=null;detailReads.clear();
   currentId=id;currentHost=host;state=null;activationAttempted=false;catalogData=null;modelDirty=false;queueStamp='';
   $('model-button').disabled=true;$('model-button').textContent='正在读取模型…';
   try{selectedSkills=new Set(JSON.parse(sessionStorage.getItem('skills:'+chatKey(id,host))||'[]'));}catch{selectedSkills=new Set();}
@@ -196,19 +199,29 @@ async function activateChat(id=currentId,host=currentHost){
     if(id===currentId&&host===currentHost)$('reconnect').disabled=false;
   }
 }
-$('back').onclick=()=>{saveDraft();rememberChat();connection.stop();historyAbort?.abort();historyBusy=false;transportReady=false;ReadingUI.reset();$('app').classList.remove('chat-open');history.replaceState(null,'',location.pathname);loadList(true).catch(e=>toast(e.message));};
+$('back').onclick=()=>{saveDraft();rememberChat();connection.stop();resetHistoryRetry();historyAbort?.abort();historyBusy=false;transportReady=false;ReadingUI.reset();$('app').classList.remove('chat-open');history.replaceState(null,'',location.pathname);loadList(true).catch(e=>toast(e.message));};
 function richText(node,text){BridgeUI.richText(node,text,state?.files,id=>sessionUrl(currentId,'files/'+id));}
 async function readDetail(turnId,messageId){
   const target=currentId,host=currentHost,key=chatKey()+'|'+turnId+'|'+(messageId||'');
+  const controller=historyAbort;
   if(detailReads.has(key))return detailReads.get(key);
   const request=api(sessionUrl(target,'history',host)+'&turn='+encodeURIComponent(turnId)
     +(messageId?'&message='+encodeURIComponent(messageId):''),undefined,{signal:historyAbort?.signal});
   detailReads.set(key,request);
   try{
     const result=await request;
-    if(currentId!==target||currentHost!==host)throw new DOMException('读取已取消','AbortError');
+    if(currentId!==target||currentHost!==host||controller!==historyAbort||controller?.signal.aborted)throw new DOMException('读取已取消','AbortError');
     return result;
   }finally{if(detailReads.get(key)===request)detailReads.delete(key);}
+}
+function restoreOpenDetails(){
+  if(document.hidden||$('app').hidden||!$('app').classList.contains('chat-open'))return;
+  for(const detail of $('messages').querySelectorAll('details[open]')){
+    let ancestor=detail.parentElement.closest('details'),hidden=false;
+    while(ancestor){if(!ancestor.open){hidden=true;break;}ancestor=ancestor.parentElement.closest('details');}
+    if(hidden)continue;
+    if(detail.ontoggle&&!detail.dataset.loaded&&!detail.dataset.loading&&Date.now()>=Number(detail.dataset.retryAt||0))detail.dispatchEvent(new Event('toggle'));
+  }
 }
 function renderTurn(turn,previous,options={}){
   const section=el('section','turn');section.dataset.id=turn.id;
@@ -240,7 +253,7 @@ function renderTurn(turn,previous,options={}){
         content.className='turn-process-content';
         ReadingUI.mutate(()=>processBody.replaceChildren(content));
         process.dataset.loaded='true';
-      }catch(error){if(error.name!=='AbortError'&&process.isConnected){processBody.textContent='详情暂未加载，收起后可重试';toast(error.message);}}
+      }catch(error){process.dataset.retryAt=String(error.name==='AbortError'?0:Date.now()+3000);if(error.name!=='AbortError'&&process.isConnected){processBody.textContent='详情暂未加载，收起后可重试';toast(error.message);}}
       finally{delete process.dataset.loading;}
     };
   }
@@ -306,7 +319,7 @@ function renderTurn(turn,previous,options={}){
               }
             });
             group.dataset.loaded='true';
-          }catch(error){if(error.name!=='AbortError'&&group.isConnected)toast(error.message);}
+          }catch(error){group.dataset.retryAt=String(error.name==='AbortError'?0:Date.now()+3000);if(error.name!=='AbortError'&&group.isConnected)toast(error.message);}
           finally{delete group.dataset.loading;}
         };
       }else if(category==='compact'){
@@ -349,7 +362,7 @@ function renderTurn(turn,previous,options={}){
               const content=rendered.querySelector('.tool-body');
               if(content)ReadingUI.mutate(()=>body.replaceChildren(...content.childNodes));
               detail.dataset.loaded='true';
-            }catch(error){if(error.name!=='AbortError'&&detail.isConnected)toast(error.message);}
+            }catch(error){detail.dataset.retryAt=String(error.name==='AbortError'?0:Date.now()+3000);if(error.name!=='AbortError'&&detail.isConnected)toast(error.message);}
             finally{delete detail.dataset.loading;}
           };
         }
@@ -455,7 +468,8 @@ function renderState(view,initial=false){
     desired.add(turn.id);
     const completed=ThreadUI.completedTurn(turn,view);
     const live=view.connected&&!completed&&turn.status==='inProgress';
-    const stamp=JSON.stringify(turn)+'|'+completed+'|'+live+'|'+filesStamp;
+    if(!turnStamps.has(turn))turnStamps.set(turn,JSON.stringify(turn));
+    const stamp=turnStamps.get(turn)+'|'+completed+'|'+live+'|'+filesStamp;
     if(seenTurns.get(turn.id)?.stamp===stamp)continue;
     const old=seenTurns.get(turn.id)?.node;
     const opened=new Map(old?[...old.querySelectorAll('details')].map(d=>[d.dataset.key,d.open]):[]);
@@ -477,6 +491,7 @@ function renderState(view,initial=false){
   ReadingUI.restore(position);
   BridgeUI.latestButton();
   BridgeUI.renderTurnNav(view.turns);
+  restoreOpenDetails();
   if($('stop-dialog').open&&(view.status!=='active'||stopTarget?.turn!==activeTurnId()))$('stop-dialog').close();
   if(transportReady&&view.activationRequired&&view.canActivate&&!activationAttempted&&$('app').classList.contains('chat-open')){
     activateChat();
@@ -515,7 +530,8 @@ $('stop-confirm').onclick=async()=>{
   catch(error){$('stop-error').textContent=error.message;}finally{$('stop-confirm').disabled=false;}
 };
 async function loadEarlier(){
-  if(historyBusy||!currentId||state?.historyLoading||!$('app').classList.contains('chat-open')||document.hidden)return;
+  if(historyBusy||!currentId||state?.historyLoading||!$('app').classList.contains('chat-open')||$('app').hidden||document.hidden||Date.now()<historyRetryAt)return;
+  clearTimeout(historyRetryTimer);historyRetryTimer=0;
   const target=currentId,host=currentHost,controller=historyAbort;
   const cursor=gapCursor||historyCursor,isGap=Boolean(gapCursor);
   let progressed=false;
@@ -528,6 +544,8 @@ async function loadEarlier(){
     if(!cursor){if(!state?.historyComplete&&state?.connected)await api(sessionUrl(target,'history',host),{});return;}
     const result=await api(sessionUrl(target,'history',host)+'&before='+encodeURIComponent(cursor),undefined,{signal:controller?.signal});
     if(target!==currentId||host!==currentHost||controller!==historyAbort||!$('app').classList.contains('chat-open'))return;
+    if(result.syncId&&state.syncId&&result.syncId!==state.syncId){progressed=Boolean(gapCursor);return;}
+    resetHistoryRetry();
     const merged=new Map([...result.turns.map(turn=>[turn.id,turn]),...olderTurns]);
     for(const turn of result.turns)merged.set(turn.id,turn);
     for(const turn of state.turns)if(!result.turns.some(row=>row.id===turn.id)||state.sequence>result.sequence)merged.set(turn.id,turn);
@@ -536,10 +554,18 @@ async function loadEarlier(){
     const {turns,...metadata}=state;
     renderState({...metadata,turns:[],historyCursor});
     progressed=gapCursor!==cursor;
-  }catch(error){historyRetryAt=Date.now()+3000;if(error.name!=='AbortError'&&target===currentId&&host===currentHost)toast(error.message);}
+  }catch(error){
+    if(error.name!=='AbortError'&&target===currentId&&host===currentHost&&controller===historyAbort&&!controller?.signal.aborted){
+      historyRetryAt=Date.now()+3000;toast(error.message);
+      if(++historyRetryCount<=3)historyRetryTimer=setTimeout(()=>{
+        historyRetryTimer=0;
+        if(target===currentId&&host===currentHost&&controller===historyAbort)loadEarlier();
+      },3000);
+    }
+  }
   finally{if(controller===historyAbort){historyBusy=false;$('history').disabled=Boolean(state?.historyLoading);if(progressed&&gapCursor&&!document.hidden)queueMicrotask(()=>loadEarlier());}}
 }
-$('history').onclick=loadEarlier;
+$('history').onclick=()=>{resetHistoryRetry();loadEarlier();};
 $('timeline').addEventListener('scroll',()=>{if($('timeline').scrollTop<120&&historyCursor)loadEarlier();},{passive:true});
 $('reconnect').onclick=async()=>{
   if(state?.canActivate)return activateChat();
@@ -565,14 +591,15 @@ BridgeUI.init({api,openChat,loadList,sessionUrl,toast,uuid,getState:()=>state,
   getCurrent:()=>({id:currentId,host:currentHost}),
   updateRow:summary=>{const row=listRows.find(row=>row.id===summary.id&&row.host===summary.host);if(row)Object.assign(row,summary);}});
 function suspendPage(){
+  resetHistoryRetry();
   clearTimeout(wakeTimer);saveDraft();rememberChat();connection.stop();historyAbort?.abort();historyBusy=false;transportReady=false;suspended=true;syncSend();
 }
 function resumePage(force=false){
   if(document.hidden||$('app').hidden)return;
-  if(historyAbort?.signal.aborted)historyAbort=new AbortController();
+  if(historyAbort?.signal.aborted){historyAbort=new AbortController();detailReads.clear();}
   if($('app').classList.contains('chat-open')&&currentId){
     if(!force&&!suspended&&connection.matches({id:currentId,host:currentHost}))return;
-    suspended=false;connection.start({id:currentId,host:currentHost,transport});
+    suspended=false;connection.start({id:currentId,host:currentHost,transport}).then(restoreOpenDetails);
   }else{suspended=false;loadList(true).catch(e=>toast(e.message));}
   BridgeUI.scheduleContexts();
 }

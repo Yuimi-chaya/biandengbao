@@ -9,6 +9,7 @@ const WEB=path.resolve(__dirname,'../web');
 const ID='33333333-3333-4333-8333-333333333333';
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 let count=300,sequence=1,delay=0,historyDelay=0,historyReads=0,detailReads=0;
+let historyFailures=0,detailDelay=0,syncId='fixture-one';
 const streams=new Set(),errors=[];
 const message=index=>({id:'a'+index,role:'assistant',kind:'agentMessage',phase:'final_answer',text:'Synthetic answer '+index});
 const turn=index=>({id:'t'+index,historyIndex:index-1,status:'completed',processAvailable:true,durationMs:2000,
@@ -17,7 +18,7 @@ const turn=index=>({id:'t'+index,historyIndex:index-1,status:'completed',process
 function view(){
   return {id:ID,host:'local',hostLabel:'Synthetic',title:'Long history',cwd:'C:/Synthetic',
     connected:true,status:'idle',model:'fixture',effort:'high',provider:'mock',requests:[],submissions:[],files:[],
-    contextUsage:{available:false},hasSavedHistory:true,historyComplete:true,historyCursor:count>12?'t'+(count-11):null,sequence,
+    contextUsage:{available:false},hasSavedHistory:true,historyComplete:true,historyCursor:count>12?'t'+(count-11):null,sequence,syncId,
     turns:Array.from({length:Math.min(12,count)},(_,index)=>turn(count-Math.min(12,count)+index+1))};
 }
 function publish(){for(const stream of streams)stream.write('event: state\ndata: '+JSON.stringify(view())+'\n\n');}
@@ -38,6 +39,7 @@ const server=http.createServer(async(request,response)=>{
       const id=url.searchParams.get('turn'),item=url.searchParams.get('message');
       if(id){
         detailReads++;
+        if(detailDelay)await pause(detailDelay);
         const index=Number(id.slice(1));
         if(item==='reason')return json({message:{id:'reason',role:'activity',kind:'reasoning',
           summary:'**Synthetic summary**',detail:'Reasoning detail '.repeat(300)+'REASON-END'},sequence});
@@ -51,6 +53,7 @@ const server=http.createServer(async(request,response)=>{
             output:'Preview',detailAvailable:true,detailKey:'tool',status:'completed'},message(index)]},sequence});
       }
       historyReads++;
+      if(historyFailures>0){historyFailures--;response.writeHead(503,{'Content-Type':'application/json'});response.end(JSON.stringify({error:'Synthetic transient history failure'}));return;}
       const before=Number(url.searchParams.get('before').slice(1));
       const end=before-1,start=Math.max(1,end-11),capturedSequence=sequence;
       const result={id:ID,host:'local',sequence:capturedSequence,historyCursor:start>1?'t'+start:null,
@@ -102,8 +105,17 @@ const server=http.createServer(async(request,response)=>{
     await process.locator('.activity-group.reasoning > summary').click();
     await page.waitForFunction(()=>document.querySelector('[data-id=t301] .reasoning-body')?.textContent.includes('REASON-END'));
     await process.locator('.activity-group.tools > summary').click();
+    detailDelay=600;
     await process.locator('.activity > summary').click();
-    await page.waitForFunction(()=>document.querySelector('[data-id=t301] .tool-output')?.textContent.includes('OUTPUT-END'));
+    await page.waitForFunction(()=>document.querySelector('[data-id=t301] .activity')?.dataset.loading==='true');
+    await page.evaluate(()=>{
+      window.syntheticHidden=true;
+      Object.defineProperty(document,'hidden',{configurable:true,get:()=>window.syntheticHidden});
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await pause(700);detailDelay=0;
+    await page.evaluate(()=>{window.syntheticHidden=false;document.dispatchEvent(new Event('visibilitychange'));});
+    await page.waitForFunction(()=>document.querySelector('[data-id=t301] .tool-output')?.textContent.includes('OUTPUT-END'),{},{timeout:2500});
     assert.ok(detailReads>=3);
     await page.locator('#message').fill('Synthetic draft');
     await page.evaluate(()=>{
@@ -111,13 +123,13 @@ const server=http.createServer(async(request,response)=>{
       Object.defineProperty(document,'hidden',{configurable:true,get:()=>window.syntheticHidden});
       document.dispatchEvent(new Event('visibilitychange'));
     });
-    count+=25;sequence=0;delay=800;
+    count+=25;sequence=0;delay=800;historyFailures=1;
     await page.evaluate(()=>{
       window.syntheticHidden=false;
       document.dispatchEvent(new Event('visibilitychange'));
       window.dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true}));
     });
-    await page.waitForFunction(()=>transportReady&&state.sequence===0&&state.turns.length===326,{},{timeout:2500});
+    await page.waitForFunction(()=>transportReady&&state.sequence===0&&state.turns.length===326,{},{timeout:6000});
     assert.deepEqual(await page.evaluate(()=>state.turns.map(turn=>turn.id)),
       Array.from({length:326},(_,index)=>'t'+(index+1)),'Wake fills multi-page gap and retains all older pages');
     assert.equal(await page.locator('#message').inputValue(),'Synthetic draft');
@@ -130,9 +142,20 @@ const server=http.createServer(async(request,response)=>{
     const reentryMs=Date.now()-started;
     assert.ok(reentryMs<700,'Cached long-thread reentry must not wait for snapshot GET');
     await reopening;
+    delay=0;
+    await page.evaluate(()=>{
+      window.turnSerializations=0;const stringify=JSON.stringify;
+      JSON.stringify=function(value,...args){if(value?.messages&&String(value.id).startsWith('t'))window.turnSerializations++;return stringify.call(this,value,...args);};
+    });
+    for(let index=0;index<10;index++){sequence++;publish();await pause(30);}
+    await page.waitForFunction(expected=>state.sequence===expected,sequence);
+    const turnSerializations=await page.evaluate(()=>window.turnSerializations);
+    assert.ok(turnSerializations<=120,'Unchanged retained history must not be serialized on each frame: '+turnSerializations);
+    syncId='fixture-two';sequence=0;publish();
+    await page.waitForFunction(()=>state.syncId==='fixture-two'&&state.sequence===0,{},{timeout:1500});
     assert.deepEqual(errors,[]);
     console.log(JSON.stringify({historyTurns:326,noBoundaryLoss:true,multiPageWakeGap:true,fullToolAndReasoning:true,
-      wakeSequenceReset:true,cachedReentryMs:reentryMs,historyReads,detailReads,
+      wakeSequenceReset:true,liveSessionReplacement:true,historyRetry:true,detailWakeRecovery:true,turnSerializations,cachedReentryMs:reentryMs,historyReads,detailReads,
       maxLongTaskMs:Math.round(Math.max(0,...await page.evaluate(()=>longTasks)))}));
   }finally{
     if(browser)await browser.close();

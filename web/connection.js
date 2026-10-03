@@ -6,6 +6,8 @@ const ConnectionUI = (() => {
     const eventSource = options.eventSource || (url => new EventSource(url));
     let epoch = 0, target = null, abort = null, source = null, retry = 0, pollTimer = 0, watchdog = 0;
     let sequence = -1, lastBeat = 0, polling = false, baseline = null, snapshotBusy = false, needsSnapshot = false;
+    let syncId = null;
+    const retiredSessions = new Set();
     const visible = () => options.visible();
     const valid = generation => generation === epoch && target && visible() && !abort?.signal.aborted;
     function clearRetry() { timers.clearTimeout(retry); retry = 0; }
@@ -21,11 +23,18 @@ const ConnectionUI = (() => {
       target = null;
       polling = false;
       baseline = null;
+      syncId = null;retiredSessions.clear();
       snapshotBusy=false;needsSnapshot=false;
     }
     function accept(view, generation) {
       if (!valid(generation)) return;
       if (view.id && view.id !== target.id || view.host && view.host !== target.host) return;
+      if(view.syncId&&retiredSessions.has(view.syncId))return;
+      if(view.syncId&&view.syncId!==syncId){
+        if(view.delta){needsSnapshot=true;options.onStatus('syncing');snapshot(generation);return;}
+        if(syncId)retiredSessions.add(syncId);
+        syncId=view.syncId;sequence=-1;baseline=null;
+      }
       lastBeat = now();
       if (view.sequence !== undefined && view.sequence <= sequence) {
         options.onStatus(needsSnapshot?'syncing':'live');
@@ -62,7 +71,7 @@ const ConnectionUI = (() => {
       if (!valid(generation) || polling) return;
       polling = true;
       try {
-        const result = await options.poll(target, sequence, abort.signal);
+        const result = await options.poll(target, sequence, abort.signal, syncId);
         if (!valid(generation)) return;
         lastBeat = now();
         if (result.state) accept(result.state, generation);

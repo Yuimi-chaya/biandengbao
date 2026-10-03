@@ -20,6 +20,14 @@ def turn(number, status="completed"):
 
 
 class PresentationTests(unittest.TestCase):
+    def test_session_replacement_has_a_distinct_sync_identity(self):
+        first, second = LiveSession(THREAD), LiveSession(THREAD)
+        self.assertNotEqual(first.view().get("syncId"), second.view().get("syncId"))
+        self.assertEqual(first.view()["syncId"], first.view()["syncId"])
+        previous = {"syncId": "old", "sequence": 50, "turns": []}
+        current = {"syncId": "new", "sequence": 0, "turns": []}
+        self.assertIs(state_delta(previous, current), current)
+
     def test_300_turn_history_pages_are_complete_small_and_duplicate_free(self):
         saved = {**state(), "turns": [turn(index) for index in range(300)]}
         native = {**state(), "turns": [turn(299)]}
@@ -212,6 +220,7 @@ class IndependentHistoryTests(unittest.TestCase):
             time.sleep(.01)
         session.artifact_read_at = 0
         with patch("bridge.service.artifact_paths", side_effect=lambda *_: (entered.set(), release.wait(2), {})[-1]):
+            session.artifact_scan_at = 0
             try:
                 started = time.monotonic()
                 self.bridge.view(THREAD, background=True)
@@ -232,6 +241,37 @@ class IndependentHistoryTests(unittest.TestCase):
                        "params": {"itemId": "cmd"}}])
         view = self.bridge.view(THREAD)
         self.assertEqual(view["requests"][0]["params"]["command"], "echo synthetic")
+
+    def test_artifact_text_extraction_does_not_block_request_or_native_events(self):
+        entered, release, returned = threading.Event(), threading.Event(), threading.Event()
+        self.bridge.view(THREAD)
+        session = self.bridge.live[THREAD]
+        deadline = time.monotonic() + 2
+        while session.artifact_loading and time.monotonic() < deadline:
+            time.sleep(.01)
+        session.artifact_read_at = 0
+        session.artifact_scan_at = 0
+        def extract(_):
+            entered.set()
+            release.wait(3)
+            return {"turns": []}
+        def request():
+            self.bridge.view(THREAD, background=True)
+            returned.set()
+        with patch.object(self.bridge, "_artifact_source", side_effect=extract):
+            worker = threading.Thread(target=request)
+            worker.start()
+            try:
+                self.assertTrue(entered.wait(1))
+                self.assertTrue(returned.wait(.3), "Artifact extraction blocked snapshot GET")
+                self.assertTrue(session.condition.acquire(timeout=.3), "Artifact extraction blocked IPC state updates")
+                session.condition.release()
+            finally:
+                release.set()
+                worker.join(3)
+                deadline = time.monotonic() + 2
+                while session.artifact_loading and time.monotonic() < deadline:
+                    time.sleep(.01)
 
 
 if __name__ == "__main__":

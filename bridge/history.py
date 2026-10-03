@@ -51,6 +51,8 @@ def keyed_items(turn):
 
 
 def state_delta(previous, current):
+    if previous.get("syncId") != current.get("syncId"):
+        return current
     old = {turn["id"]: turn for turn in previous["turns"]}
     changed = []
     for turn in current["turns"]:

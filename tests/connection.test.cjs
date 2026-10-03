@@ -137,5 +137,17 @@ function harness() {
   pollRace.connection.receive({id:'a',sequence:3,turns:[]},pollRace.connection.generation());
   check([...pollRace.timers.values()].some(timer=>timer.delay===200),true);
   pollRace.connection.stop();
+  const replacement=harness();
+  replacement.options.snapshot=async()=>({id:'a',host:'local',syncId:'old-session',sequence:50,turns:[]});
+  await replacement.connection.start({id:'a',host:'local',transport:'sse'});
+  replacement.sources[0].emit('state',{id:'a',host:'local',syncId:'new-session',sequence:0,turns:[]});
+  check(replacement.views.at(-1).syncId,'new-session');
+  check(replacement.views.at(-1).sequence,0);
+  replacement.connection.receive({id:'a',host:'local',syncId:'old-session',sequence:51,turns:[]},replacement.connection.generation());
+  check(replacement.views.at(-1).syncId,'new-session');
+  replacement.sources[0].emit('state',{id:'a',host:'local',syncId:'new-session',sequence:1,
+    baseSequence:0,delta:true,turnOrder:[],turns:[]});
+  check(replacement.views.at(-1).sequence,1);
+  replacement.connection.stop();
   console.log(assertions + ' connection assertions passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

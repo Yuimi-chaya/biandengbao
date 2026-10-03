@@ -545,6 +545,19 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(self.request('POST', '/api/rpc', {'method': 'arbitrary'}, auth)[0], 404)
         self.assertEqual(self.request('GET', '/.local/config.json', headers=auth)[0], 404)
 
+    def test_poll_returns_replaced_session_even_with_equal_sequence(self):
+        session = LiveSession(THREAD)
+        session.state = state()
+        session.connected = True
+        self.server.bridge.session = lambda *a, **k: session
+        self.server.bridge.view = lambda *a, **k: session.view()
+        auth = self.login()
+        status, _, value = self.request('GET', '/api/sessions/'+THREAD+'/poll?after=0&sync=retired-session', headers=auth)
+        self.assertEqual(status, 200)
+        self.assertEqual(value['state']['syncId'], session.sync_id)
+        self.assertEqual(value['state']['sequence'], 0)
+        self.assertEqual(session.viewers, 0)
+
 
 if __name__ == '__main__':
     unittest.main()

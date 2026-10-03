@@ -43,6 +43,7 @@ class LiveSession:
         self.state = None
         self.revision = None
         self.sequence = 0
+        self.sync_id = uuid.uuid4().hex
         self.connected = False
         self.connecting = False
         self.retry_at = 0
@@ -68,6 +69,7 @@ class LiveSession:
         self.artifact_loading = False
         self.files = []
         self.artifact_read_at = 0
+        self.artifact_scan_at = 0
         self.artifact_source_sequence = -1
         self.native_read_at = 0
 
@@ -104,6 +106,7 @@ class LiveSession:
                 "turnHistory", {}).get("history", {}).get(
                     "isComplete", raw.get("turnsPagination", {}).get("hasLoadedOldest", True))
             result["sequence"] = self.sequence
+            result["syncId"] = self.sync_id
             result["connectionError"] = self.error
             result["connecting"] = self.connecting
             result["loadingHistory"] = self.state is None and self.saved_state is None
@@ -570,6 +573,8 @@ class Bridge:
                         pass  # Unknown outcomes stay recorded and are never automatically replayed.
                 if (session.viewers > 0 or queued) and not session.connected:
                     self._refresh_async(session)
+                if session.viewers > 0:
+                    self._artifacts_async(session)
             self._trim_sessions()
             delay = 3 if self.ipc.client_id else min(30, delay * 2)
 
@@ -638,35 +643,42 @@ class Bridge:
         return view
 
     def _artifact_source(self, session):
+        # Copy only text references and attachment descriptors under the state lock.
+        # Regex, hashing and filesystem work must not delay native state events.
+        with session.condition:
+            snapshot = [(item.get("text", ""),
+                         [dict(value) for value in item.get("content", [])
+                          if isinstance(value, dict) and value.get("type") in ("localImage", "image", "file")]
+                         if isinstance(item.get("content"), list) else [])
+                        for turn in session.display_turns()
+                        for item in items_array(turn.get("items", []))]
+            raw = (session.state if session.connected else session.saved_state) or session.state or {}
+            cwd = raw.get("cwd")
         items = []
-        for turn in session.display_turns():
-            for item in items_array(turn.get("items", [])):
-                text = item.get("text", "")
-                links = [match.group(0) for match in MARKDOWN_PATH.finditer(text)] if isinstance(text, str) else []
-                content = [dict(value) for value in item.get("content", [])
-                           if isinstance(value, dict) and value.get("type") in ("localImage", "image", "file")
-                           ] if isinstance(item.get("content"), list) else []
-                if links or content:
-                    items.append({"type": "agentMessage", "text": "\n".join(links), "content": content})
-        raw = (session.state if session.connected else session.saved_state) or session.state or {}
-        return {"cwd": raw.get("cwd"), "turns": [{"items": items}]}
+        for text, content in snapshot:
+            links = [match.group(0) for match in MARKDOWN_PATH.finditer(text)] if isinstance(text, str) else []
+            if links or content:
+                items.append({"type": "agentMessage", "text": "\n".join(links), "content": content})
+        return {"cwd": cwd, "turns": [{"items": items}]}
 
     def _artifacts_async(self, session):
         if self.host != "local" or self.closed.is_set():
             return
         with session.condition:
-            if session.artifact_loading:
+            if session.artifact_loading or time.monotonic() - session.artifact_scan_at < 1:
                 return
             if session.artifact_source_sequence == session.sequence and time.monotonic() - session.artifact_read_at < 15:
                 return
             session.artifact_source_sequence = session.sequence
-            source = self._artifact_source(session)
-            signature = hashlib.sha256(json.dumps(source, sort_keys=True).encode()).digest()
-            if signature == session.artifact_signature and time.monotonic() - session.artifact_read_at < 15:
-                return
+            session.artifact_scan_at = time.monotonic()
             session.artifact_loading = True
         def read():
             try:
+                source = self._artifact_source(session)
+                signature = hashlib.sha256(json.dumps(source, sort_keys=True).encode()).digest()
+                with session.condition:
+                    if signature == session.artifact_signature and time.monotonic() - session.artifact_read_at < 15:
+                        return
                 artifacts = artifact_paths(source, self.store.home)
                 files = [{"id": key, "name": value["name"], "reference": value["reference"],
                           "image": value["image"]} for key, value in artifacts.items()]
@@ -701,12 +713,11 @@ class Bridge:
             return {"id": thread_id, "host": self.host,
                     "turns": [{**present_turn(turn), "historyIndex": positions[id(turn)]} for turn in rows],
                     "historyCursor": cursor, "historyLoading": session.history_loading,
-                    "historyError": session.history_error, "sequence": session.sequence}
+                    "historyError": session.history_error, "sequence": session.sequence, "syncId": session.sync_id}
 
     def artifact(self, thread_id, artifact_id):
         session = self.session(thread_id, attach=False)
-        with session.condition:
-            source = self._artifact_source(session)
+        source = self._artifact_source(session)
         files = artifact_paths(source, self.store.home) if self.host == "local" else {}
         if artifact_id not in files:
             raise KeyError("文件不属于此聊天的工作目录")
