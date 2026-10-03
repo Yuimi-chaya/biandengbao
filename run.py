@@ -11,6 +11,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -19,6 +20,8 @@ from bridge.httpd import GatewayServer
 from bridge.lifecycle import GatewayControl
 from bridge.service import Bridge
 from bridge.tunnel import QuickTunnel
+from bridge.gateway_admin import GatewayAdmin
+from bridge.version import VERSION
 
 ROOT = Path(__file__).resolve().parent
 
@@ -48,8 +51,10 @@ def save_config(path, config):
 
 def main():
     # Redirected Windows streams may use a codec that cannot encode Chinese.
-    sys.stdout.reconfigure(encoding='utf-8')
-    sys.stderr.reconfigure(encoding='utf-8', errors='backslashreplace')
+    if sys.stdout:
+        sys.stdout.reconfigure(encoding='utf-8')
+    if sys.stderr:
+        sys.stderr.reconfigure(encoding='utf-8', errors='backslashreplace')
     parser = argparse.ArgumentParser(description="便蹬宝 · Codex App 手机网关")
     parser.add_argument("--config", type=Path, default=ROOT / ".local/config.json")
     parser.add_argument("--lan", action="store_true", help="监听局域网；默认只监听本机")
@@ -105,6 +110,16 @@ def main():
     pid_file.write_text(str(os.getpid()), encoding='utf-8')
     control = GatewayControl(args.config.parent)
     tunnel = None
+    tunnel_error = None
+    tunnel_thread = None
+    started_at = __import__('time').time()
+    def management_status():
+        connected = bool(tunnel and tunnel.ready.is_set() and tunnel.process and tunnel.process.poll() is None)
+        return {"pid": os.getpid(), "running": True, "version": VERSION,
+                "startedAt": started_at, "port": args.port,
+                "addresses": sorted(server.origins),
+                "tunnel": {"requested": args.tunnel, "connected": connected,
+                           "url": tunnel.url if connected else None, "error": tunnel_error}}
     def stop_signal(signum, frame):
         raise KeyboardInterrupt()
     signal.signal(signal.SIGTERM, stop_signal)
@@ -115,6 +130,7 @@ def main():
     if first_login.exists():
         print("首次登录凭据：" + str(first_login), flush=True)
     try:
+        control.start(server.shutdown, GatewayAdmin(server, args.config, management_status))
         if args.tunnel:
             print("正在建立临时 HTTPS 外网连接…", flush=True)
             def allow_origin(origin):
@@ -123,18 +139,24 @@ def main():
                 server.hosts.add(host)
                 server.secure_hosts.add(host)
             tunnel = QuickTunnel(args.cloudflared, args.port, args.config.parent, allow_origin)
-            try:
-                url = tunnel.start()
-                print("外网地址：" + url, flush=True)
-            except RuntimeError as exc:
-                print(str(exc), flush=True)
-        control.start(server.shutdown)
+            def start_tunnel():
+                nonlocal tunnel_error
+                try:
+                    url = tunnel.start()
+                    print("外网地址：" + url, flush=True)
+                except (RuntimeError, OSError) as exc:
+                    tunnel_error = str(exc)
+                    print(str(exc), flush=True)
+            tunnel_thread = threading.Thread(target=start_tunnel, daemon=True)
+            tunnel_thread.start()
         server.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:
         pass
     finally:
         if tunnel:
             tunnel.close()
+        if tunnel_thread:
+            tunnel_thread.join(timeout=3)
         bridge.close()
         server.server_close()
         if pid_file.exists() and pid_file.read_text(encoding='utf-8').strip() == str(os.getpid()):

@@ -1,6 +1,6 @@
-# Windows 登录自启动（可选）
+# 登录自启动（可选）
 
-自启动默认关闭，只在你明确启用后创建当前用户的计划任务。登录 Windows 后，后台持续等待和监测 Codex App；同一次开机内每次打开 App，都会启动或重新绑定带密码的局域网服务。不会自动打开或重启 App，不需要管理员权限或 Windows 密码，也不会开启外网隧道。
+自启动默认关闭，只在明确启用后创建当前用户的计划任务（Windows）或 LaunchAgent（macOS）。登录后持续监测 Codex App，同一次开机内每次打开 App 都会恢复保存的连接模式。首次默认局域网；外网必须显式配置。不自动打开或重启 App，不需要保存系统登录密码。
 
 ## 配置
 
@@ -22,7 +22,17 @@ py -3 -B .\configure.py --autostart disable
 py -3 -B .\configure.py --autostart remove
 ```
 
-也可以双击 `configure.cmd` 进入本机选项菜单，回车取消，不会默认启用。如果没有 `py`，使用 `python`。
+Windows 可双击 `configure.cmd` 进入选项菜单，回车取消。如果没有 `py`，使用 `python`。macOS 把以上入口改为 `python3 -B configure.py`；首次仍需来自 Codex App 的调用上下文，或使用[桌面管理端](MANAGER.md)显式选择现有聊天。
+
+## 保存外网模式
+
+先安装自己信任的 cloudflared 程序，再显式配置临时外网。例如 Windows 程序位于 C:/Tools/cloudflared.exe 时：
+
+~~~powershell
+py -3 -B .\configure.py --autostart enable --network-mode tunnel --cloudflared 'C:/Tools/cloudflared.exe'
+~~~
+
+已有 HTTPS 反向代理可用 `--network-mode proxy --origin https://codex.example.com`；该示例域名需替换成你已配置的域名。切回局域网用 `--network-mode lan`。不传模式会保留原配置。临时地址随重连变化，不保证大陆可达；已有域名模式不会启动或管理你的代理程序。运行中的监听程序需要先关闭并等待退出，再更改源码配置。
 
 自定义部署时，配置入口和网关必须使用同一份 `--config`。例如网关配置在 `.local/bedroom.json`，端口为 `8788`：
 
@@ -44,4 +54,4 @@ py -3 -B .\configure.py --autostart remove --config '.\.local\bedroom.json'
 - 同配置目录已有手动网关或端口被占用时，只等待、不接管也不强杀。首次启用前如有手动网关，先用 `stop.py` 停止它，让监测程序启动自己的实例。启动未确认或协作停止超时会报告错误，不盲目重试；查看状态和日志后处理。App 更新改变内部接口时仍可能需要适配。
 - 任务以 `Biandengbao-LAN-` 开头，按安装目录和配置路径区分。状态、选项与日志保存在配置文件旁的 `autostart-*` 目录，不包含模型 API key，但不要公开本机目录或聊天调用上下文。同目录的多个配置不会同时启动多个网关；独立实例应使用不同配置目录和端口。
 - 自启动保存安装目录的绝对路径。移动仓库、改配置路径或删除 Python 前，先从旧目录移除任务，再从新目录配置。发现同名但不属于此安装的任务时拒绝改动。
-- 目前只支持 Windows Store 版 Codex App。macOS 不安装任务、不修改启动设置，仍用手动启动方式。自动测试与当前会话内试运行不等于完整重启登录验收。
+- Windows 自动发现适配 Store 版 Codex App；macOS 使用 App 进程、同用户 UNIX socket 和只读工具清单确认连接。发现不唯一或内部协议改变时拒绝猜测。macOS 真实 App 绑定及完整登录、重复打开验收仍需实机完成；构建和模拟测试不能代替这些验收。

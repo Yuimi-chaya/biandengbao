@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>便蹬宝 · 管理端</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/lucide.js" defer></script>
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand"><span class="brand-symbol"><i data-lucide="command"></i></span><div><strong>便蹬宝</strong><small>桌面管理端</small></div></div>
+    <nav aria-label="管理页面">
+      <button class="nav-item selected" data-page="overview" aria-current="page"><i data-lucide="layout-dashboard"></i><span>概览</span></button>
+      <button class="nav-item" data-page="connection"><i data-lucide="radio-tower"></i><span>连接</span></button>
+      <button class="nav-item" data-page="devices"><i data-lucide="monitor-smartphone"></i><span>登录设备</span><span class="nav-count" id="device-count">—</span></button>
+      <button class="nav-item" data-page="settings"><i data-lucide="settings-2"></i><span>设置</span></button>
+    </nav>
+    <div class="sidebar-bottom"><div class="local-label"><span class="status-dot"></span>仅本机可管理</div><span id="sidebar-version">正在连接</span></div>
+  </aside>
+  <main>
+    <header class="page-header"><div><p class="eyebrow">BIANDENGBAO</p><h1 id="page-title">一切，就在手边</h1></div><div class="header-actions"><span id="health" class="badge">连接管理端</span><button id="refresh" class="icon-button" title="刷新状态" aria-label="刷新状态"><i data-lucide="refresh-cw"></i></button></div></header>
+    <div id="notice" class="notice" role="status" hidden></div>
+    <section class="page" id="overview" aria-labelledby="page-title">
+      <div class="section-heading"><h2>运行状态</h2><button id="service-toggle" class="primary" disabled><i data-lucide="play"></i><span>启动服务</span></button></div>
+      <div class="service-list">
+        <article class="service-row"><div class="app-icon"><i data-lucide="command"></i></div><div class="service-info"><h3>Codex App</h3><p id="app-version">等待检测版本</p></div><span class="badge" id="app-state">检测中</span></article>
+        <article class="service-row"><div class="app-icon mint"><i data-lucide="radio-tower"></i></div><div class="service-info"><h3>便蹬宝网关</h3><p id="gateway-version">等待检测版本</p></div><span class="badge" id="gateway-state">检测中</span></article>
+      </div>
+      <div class="section-heading separated"><h2>手机访问</h2><button class="text-button" data-go="connection">连接设置<i data-lucide="arrow-up-right"></i></button></div>
+      <div id="addresses" class="address-list"><div class="empty-state compact"><i data-lucide="wifi"></i><p>启动服务后，访问地址会显示在这里</p></div></div>
+      <p class="muted-note" id="network-note">局域网模式 · 手机和电脑连接同一网络</p>
+      <div class="section-heading separated"><h2>自动运行</h2></div>
+      <div class="setting-row"><div><h3>登录电脑后自动运行</h3><p>等待 Codex App，每次重新打开 App 后恢复已选连接模式</p></div><label class="switch"><input type="checkbox" id="autostart" aria-label="登录电脑后自动运行"><span></span></label></div>
+      <div id="worker-note" class="footnote"></div>
+    </section>
+    <section class="page" id="connection" hidden aria-labelledby="page-title">
+      <form id="connection-form">
+        <fieldset class="network-options"><legend>访问方式</legend>
+          <label class="network-option"><input type="radio" name="mode" value="lan" checked><i data-lucide="wifi"></i><strong>局域网</strong><small>同一网络内访问</small></label>
+          <label class="network-option"><input type="radio" name="mode" value="tunnel"><i data-lucide="globe-2"></i><strong>临时外网</strong><small>Cloudflare HTTPS</small></label>
+          <label class="network-option"><input type="radio" name="mode" value="proxy"><i data-lucide="waypoints"></i><strong>已有域名</strong><small>接入 HTTPS 反向代理</small></label>
+        </fieldset>
+        <div class="mode-detail" id="tunnel-fields" hidden><label for="cloudflared">cloudflared 程序路径</label><input id="cloudflared" autocomplete="off" spellcheck="false" placeholder="选择已安装程序的绝对路径"><p class="footnote">临时地址会在重连后变化。大陆网络可用性取决于线路；不自动下载安装隧道程序。</p></div>
+        <div class="mode-detail" id="proxy-fields" hidden><label for="proxy-origin">HTTPS 域名</label><input id="proxy-origin" type="url" placeholder="https://codex.example.com"><p class="footnote">使用你已配置的反向代理，转发到本机端口。管理端不代管域名、证书或代理进程。</p></div>
+        <div class="field-grid"><div><label for="port">网关端口</label><input id="port" type="number" min="1" max="65535" required></div><div><label for="codex-home">Codex 数据目录</label><input id="codex-home" spellcheck="false" required></div></div>
+        <div class="section-heading separated"><h2>桌面连接</h2><button id="load-contexts" type="button" class="text-button"><i data-lucide="refresh-cw"></i>读取聊天</button></div>
+        <label for="caller">调用上下文</label><select id="caller"><option value="">请选择一个已有的 Codex 聊天</option></select>
+        <p class="footnote">只读取聊天列表；不会发送消息。此绑定用于调用桌面工具，新建和继续聊天仍由原 Codex App 执行。</p>
+        <div class="form-footer"><p>配置会同时用于手动启动和下次自启动。</p><button class="primary" type="submit"><i data-lucide="check"></i>保存连接设置</button></div>
+      </form>
+    </section>
+    <section class="page" id="devices" hidden aria-labelledby="page-title">
+      <div class="section-heading"><div><h2>已登录的浏览器</h2><p class="footnote">按登录会话列出；同一设备的不同浏览器可能分别出现。</p></div><button id="revoke-all" class="secondary danger-text" disabled><i data-lucide="log-out"></i>全部退出</button></div>
+      <div id="devices-list" class="devices-list"></div>
+      <p class="footnote">解除登录后，该会话不能继续读取或操作聊天。对方仍知道密码时可以再次登录；需要阻止重新登录时，请修改密码。</p>
+    </section>
+    <section class="page" id="settings" hidden aria-labelledby="page-title">
+      <div class="section-heading"><h2>网关账号</h2><i class="section-icon" data-lucide="shield-check"></i></div>
+      <form id="account-form"><label for="username">账号名</label><input id="username" maxlength="100" autocomplete="username" required>
+        <div class="field-grid equal"><div><label for="password">新密码</label><div class="password-field"><input id="password" type="password" minlength="12" maxlength="1000" autocomplete="new-password" placeholder="至少 12 位" required><button type="button" id="show-password" class="icon-button" title="显示或隐藏密码" aria-label="显示或隐藏密码"><i data-lucide="eye"></i></button></div></div><div><label for="password-confirm">确认新密码</label><input id="password-confirm" type="password" autocomplete="new-password" required></div></div>
+        <div class="form-footer"><p>与 Codex 模型账号无关。保存后，所有设备需要重新登录。</p><button class="primary" type="submit"><i data-lucide="key-round"></i>保存账号</button></div>
+      </form>
+      <div class="section-heading separated"><h2>外观</h2></div><div class="setting-row"><div><h3>颜色主题</h3><p>管理端独立保存外观偏好</p></div><select id="appearance" aria-label="颜色主题"><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select></div>
+      <div class="section-heading separated"><h2>版本与更新</h2><button id="check-update" class="secondary"><i data-lucide="refresh-cw"></i>检查 main 更新</button></div>
+      <div class="version-line"><span id="build-version">—</span><code id="build-revision">—</code></div><p class="footnote" id="update-result">仅联网检查代码版本，不会自动下载、覆盖配置或重启服务。</p>
+      <dl class="paths"><dt>配置位置</dt><dd id="config-path">—</dd><dt>日志位置</dt><dd id="log-path">—</dd></dl>
+    </section>
+  </main>
+  <dialog id="confirm-dialog"><form method="dialog"><div class="dialog-icon"><i data-lucide="circle-help"></i></div><h2 id="confirm-title">确认操作</h2><p id="confirm-body"></p><div class="dialog-actions"><button value="cancel" class="secondary">取消</button><button value="confirm" class="primary" id="confirm-button">确认</button></div></form></dialog>
+  <div id="toast" class="toast" role="status" hidden></div>
+</body>
+</html>

@@ -12,6 +12,12 @@ SESSION_ALIVE = windows_app.session_alive
 
 class SupervisorTests(unittest.TestCase):
     def setUp(self):
+        native = patch.object(autostart, "windows_app", windows_app)
+        native.start()
+        self.addCleanup(native.stop)
+        started = patch.object(windows_app, "process_started", return_value=None)
+        started.start()
+        self.addCleanup(started.stop)
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.profile = autostart.Profile(temporary.name,

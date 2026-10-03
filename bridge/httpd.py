@@ -237,7 +237,8 @@ class Handler(BaseHTTPRequestHandler):
                 username, password = body.get("username", ""), body.get("password", "")
                 if not isinstance(username, str) or not isinstance(password, str) or len(username) > 200 or len(password) > 1000:
                     raise ValueError("账号或密码格式不正确")
-                token, session = self.server.auth.login(username, password, self.client_address[0])
+                token, session = self.server.auth.login(username, password, self.client_address[0],
+                                                       self.headers.get("User-Agent", ""))
                 self.server.auth.logout(self.token())
                 return self.output(200, {"csrf": session["csrf"]}, cookie=self.cookie(token))
             auth = self.authorized(write)
@@ -397,6 +398,10 @@ class Handler(BaseHTTPRequestHandler):
                     session.condition.wait_for(lambda: session.sequence != sequence or bridge.closed.is_set(), timeout=12)
                     updated = session.sequence != sequence
                     sequence = session.sequence
+                if not self.server.auth.get(token):
+                    self.wfile.write(b'event: logout\ndata: {}\n\n')
+                    self.wfile.flush()
+                    break
                 if updated:
                     view = bridge.view(thread_id, attach=False, background=True)
                     payload = json.dumps(state_delta(previous, view) if delta and previous else view,

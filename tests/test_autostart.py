@@ -99,6 +99,12 @@ class WindowsDiscoveryTests(unittest.TestCase):
 
 class AutostartTests(unittest.TestCase):
     def setUp(self):
+        native = patch.object(autostart, "windows_app", windows_app)
+        native.start()
+        self.addCleanup(native.stop)
+        started = patch.object(windows_app, "process_started", return_value=None)
+        started.start()
+        self.addCleanup(started.stop)
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name) / "repo with spaces"
@@ -420,7 +426,8 @@ class AutostartTests(unittest.TestCase):
 
     def test_task_command_uses_argument_array_not_shell_command(self):
         self.backend.stop()
-        with patch.dict(os.environ, {"SystemRoot": r"C:\Windows"}), \
+        with patch.object(autostart.sys, "platform", "win32"), \
+                patch.dict(os.environ, {"SystemRoot": r"C:\Windows"}), \
                 patch.object(self.profile, "pythonw", return_value=self.root / "pythonw.exe"), \
                 patch.object(autostart.subprocess, "run",
                              return_value=Mock(returncode=0, stdout='{"exists":false}')) as run:

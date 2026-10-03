@@ -64,6 +64,12 @@
 
 ## 安装使用
 
+### 桌面管理端（候选版）
+
+Release 候选包提供 Windows x64、Apple Silicon、Intel Mac 管理端，内置运行环境。可查看 App/网关状态与版本、设置网关账号、解除设备登录、选择局域网/临时 HTTPS/已有域名，并按保存的连接模式启用登录自启动。支持深浅色，另有共用后端的 JSON CLI 和仅本机管理接口。
+
+先阅读 [管理端安装与脚本接管](docs/MANAGER.md)。候选包未签名；macOS 原生 App 绑定及各平台自启动仍需实机验收。以下是无需管理端的源码安装方式。
+
 需要 **Windows 10/11 或 macOS、Python 3.9+、正在运行的 Codex App**。网关只用 Python 标准库，前端资源随仓库提供，不用 `pip install` 或 `npm install`。
 
 ### 交给 Agent
@@ -100,9 +106,9 @@ python3 -B "$PWD/run.py" --lan
 
 ### 可选：登录自启动
 
-Windows 默认不开启。先建立网关密码配置，再让 App 内的 Agent 执行 `py -3 -B .\configure.py --autostart enable`；也可双击 `configure.cmd` 选择。以后登录 Windows，后台持续监测 App，同一次开机内每次打开都能启动或重新绑定局域网服务；不自动打开 App，不开启外网或免密。手动停止网关后保持停止，直到下次打开 App。
+Windows 和 macOS 默认不开启。先建立网关密码配置，再让 App 内的 Agent 执行 `py -3 -B .\configure.py --autostart enable`（Mac 使用 `python3 -B configure.py --autostart enable`）；Windows 也可双击 `configure.cmd` 选择。登录后持续监测 App，同一次开机内每次打开都重新确认通道并恢复保存的连接模式；不自动打开 App，不开启免密。首次默认为局域网；外网必须显式配置。
 
-查看状态用 `--autostart status`，关闭用 `--autostart disable`，移除任务用 `--autostart remove`。关闭自启动不停止当前服务。自定义端口/配置和限制见 [自启动配置](docs/AUTOSTART.md)；macOS 暂不支持此选项。
+查看状态用 `--autostart status`，关闭用 `--autostart disable`，移除用 `--autostart remove`。关闭自启动不停止当前服务。端口、连接模式和平台限制见 [自启动配置](docs/AUTOSTART.md) 和 [桌面管理端](docs/MANAGER.md)。
 
 ### 外网访问
 

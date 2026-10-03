@@ -1,4 +1,4 @@
-"""Opt-in, current-user Windows logon startup. Never launch or stop the App."""
+"""Opt-in user startup on Windows/macOS. Never launch or stop the App."""
 import hashlib
 import json
 import os
@@ -10,12 +10,16 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import windows_app
+if sys.platform == "darwin":
+    from . import macos_app as windows_app
+else:
+    from . import windows_app
 from .lifecycle import request_stop
+from .network import network_arguments, validate_network
 
 
 def supported():
-    return sys.platform == "win32"
+    return sys.platform in ("win32", "darwin")
 
 
 def read_json(path):
@@ -49,12 +53,17 @@ class Profile:
         self.worker = self.root / "autostart.py"
 
     def pythonw(self):
+        if getattr(sys, "frozen", False):
+            return Path(sys.executable)
         path = Path(sys.executable).with_name("pythonw.exe")
         if not path.is_file():
             raise RuntimeError("当前 Python 安装缺少 pythonw.exe；未配置自启动")
         return path
 
     def task(self, mode):
+        if sys.platform == "darwin":
+            from .macos_startup import task
+            return task(self, mode)
         powershell = (Path(os.environ["SystemRoot"]) / "System32" /
                       "WindowsPowerShell/v1.0/powershell.exe")
         try:
@@ -64,7 +73,8 @@ class Profile:
                 "-File", str(self.root / "tools/configure-autostart.ps1"),
                 "-Mode", mode, "-TaskName", self.task_name,
                 "-Pythonw", str(self.pythonw()), "-Worker", str(self.worker),
-                "-SettingsPath", str(self.options)],
+                "-SettingsPath", str(self.options)] +
+                (["-Packaged"] if getattr(sys, "frozen", False) else []),
                 stdin=subprocess.DEVNULL, capture_output=True, encoding="utf-8",
                 errors="replace", timeout=30, check=False,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -77,16 +87,16 @@ class Profile:
     def status(self):
         if not supported():
             return {"supported": False, "enabled": False, "exists": False,
-                    "message": "登录自启动目前仅支持 Windows"}
+                    "message": "登录自启动支持 Windows 和 macOS"}
         state = self.task("status")
         state["supported"] = True
         state["taskName"] = self.task_name
         state["worker"] = read_json(self.control / "status.json")
         return state
 
-    def enable(self, port=None, codex_home=None, caller=None):
+    def enable(self, port=None, codex_home=None, caller=None, network=None):
         if not supported():
-            raise RuntimeError("登录自启动目前仅支持 Windows")
+            raise RuntimeError("登录自启动支持 Windows 和 macOS")
         previous = read_json(self.options) or {}
         port = port if port is not None else previous.get("port", 8787)
         if type(port) is not int or not 1 <= port <= 65535:
@@ -106,6 +116,7 @@ class Profile:
                  "codexHome": str(Path(codex_home or previous.get("codexHome") or
                      os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).resolve()),
                  "callerThread": caller.strip()}
+        value["network"] = validate_network(network or previous.get("network") or {"mode": "lan"}, require_binary=True)
         self.control.mkdir(parents=True, exist_ok=True)
         self.disabled.touch()
         try:
@@ -120,7 +131,7 @@ class Profile:
 
     def disable(self):
         if not supported():
-            raise RuntimeError("登录自启动目前仅支持 Windows")
+            raise RuntimeError("登录自启动支持 Windows 和 macOS")
         self.task("status")  # Refuse a foreign task before writing any marker.
         self.control.mkdir(parents=True, exist_ok=True)
         self.disabled.touch()
@@ -150,12 +161,14 @@ class Profile:
                 not isinstance(value.get("codexHome"), str) or
                 not Path(value["codexHome"]).is_absolute()):
             raise RuntimeError("自启动配置无效；请在当前安装目录重新启用")
+        validate_network(value.get("network", {"mode": "lan"}))
         return value
 
     def write_status(self, state, **fields):
+        started = windows_app.process_started(os.getpid()) if sys.platform in ("win32", "darwin") else None
         write_json(self.control / "status.json", {
             "state": state, "time": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "supervisorPid": os.getpid(), **fields})
+            "supervisorPid": os.getpid(), "supervisorStarted": started, **fields})
 
 
 def profile_from_settings(root, settings):
@@ -196,31 +209,43 @@ def launch(profile, options, binding):
         raise RuntimeError("自启动已关闭或同配置目录已有服务；未启动进程")
     if not windows_app.binding_alive(binding):
         raise RuntimeError("App 连接已变化；未启动进程")
-    python = Path(sys.executable).with_name("python.exe")
-    if not python.is_file() or not (profile.root / "run.py").is_file():
+    packaged = getattr(sys, "frozen", False)
+    python = Path(sys.executable) if packaged or os.name != "nt" else Path(sys.executable).with_name("python.exe")
+    if not python.is_file() or (not packaged and not (profile.root / "run.py").is_file()):
         raise RuntimeError("Python 或安装目录缺失；未启动进程")
     environment = os.environ.copy()
     environment["CODEX_APP_TOOLS_PIPE_PATH"] = binding["pipe"]
     environment["CODEX_THREAD_ID"] = options["callerThread"]
+    environment["CODEX_HOME"] = options["codexHome"]
+    if packaged:
+        environment["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    arguments = ([str(python), "--gateway"] if packaged else
+                 [str(python), "-B", str(profile.root / "run.py")])
+    arguments += network_arguments(options.get("network", {"mode": "lan"}))
+    if binding.get("ipc"):
+        arguments += ["--ipc-path", binding["ipc"]]
     stamp = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8]
     stdout = profile.control / ("gateway-" + stamp + ".log")
     stderr = profile.control / ("gateway-" + stamp + ".err.log")
     with stdout.open("xb") as output, stderr.open("xb") as errors:
-        process = subprocess.Popen([
-            str(python), "-B", str(profile.root / "run.py"),
-            "--lan", "--port", str(options["port"]),
+        process = subprocess.Popen(arguments + [
+            "--port", str(options["port"]),
             "--config", str(profile.config),
             "--codex-home", options["codexHome"],
             "--codex-bin", binding["runtime"]],
             cwd=str(profile.root), env=environment, stdin=subprocess.DEVNULL,
             stdout=output, stderr=errors,
-            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW)
+            creationflags=(subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW) if os.name == "nt" else 0,
+            start_new_session=os.name != "nt")
     return process, stdout, stderr
 
 
 @contextmanager
 def worker_lock(profile):
-    import msvcrt
+    if os.name == "nt":
+        import msvcrt
+    else:
+        import fcntl
     profile.control.mkdir(parents=True, exist_ok=True)
     # Gateway lifecycle and attachment data are shared by the config directory.
     with (profile.config.parent / "autostart.lock").open("a+b") as lock:
@@ -230,7 +255,10 @@ def worker_lock(profile):
             lock.flush()
         lock.seek(0)
         try:
-            msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+            if os.name == "nt":
+                msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             yield False
             return
@@ -238,7 +266,10 @@ def worker_lock(profile):
             yield True
         finally:
             lock.seek(0)
-            msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+            if os.name == "nt":
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
 class Supervisor:
@@ -344,8 +375,10 @@ class Supervisor:
 
 def run_worker(profile, once=False):
     if not supported():
-        raise RuntimeError("登录自启动目前仅支持 Windows")
+        raise RuntimeError("登录自启动支持 Windows 和 macOS")
     options = profile.load_options()
+    if sys.platform == "darwin":
+        os.environ["CODEX_HOME"] = options["codexHome"]
     with worker_lock(profile) as acquired:
         if not acquired:
             profile.write_status("another_worker")

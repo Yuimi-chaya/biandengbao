@@ -3,7 +3,8 @@ param(
     [Parameter(Mandatory=$true)][string]$TaskName,
     [Parameter(Mandatory=$true)][string]$Pythonw,
     [Parameter(Mandatory=$true)][string]$Worker,
-    [Parameter(Mandatory=$true)][string]$SettingsPath
+    [Parameter(Mandatory=$true)][string]$SettingsPath,
+    [switch]$Packaged
 )
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
@@ -12,6 +13,7 @@ foreach ($path in @($Pythonw, $Worker, $SettingsPath)) {
     if (![IO.Path]::IsPathRooted($path) -or $path.Contains('"')) { throw 'Invalid task path.' }
 }
 $arguments = "-B `"$Worker`" --settings `"$SettingsPath`""
+if ($Packaged) { $arguments = "--worker `"$SettingsPath`"" }
 $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 if ($task -and ($task.Actions.Count -ne 1 -or
         $task.Actions[0].Execute -ne $Pythonw -or
@@ -21,7 +23,7 @@ if ($task -and ($task.Actions.Count -ne 1 -or
 switch ($Mode) {
     'enable' {
         if (!(Test-Path -LiteralPath $Pythonw -PathType Leaf) -or
-                !(Test-Path -LiteralPath $Worker -PathType Leaf) -or
+                (!$Packaged -and !(Test-Path -LiteralPath $Worker -PathType Leaf)) -or
                 !(Test-Path -LiteralPath $SettingsPath -PathType Leaf)) {
             throw 'Autostart files are missing.'
         }

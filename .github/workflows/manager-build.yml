@@ -1,0 +1,49 @@
+name: Desktop manager binaries
+
+on:
+  push:
+    branches: [build/desktop-manager]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - os: windows-latest
+            architecture: x64
+            artifact: Windows-x64
+          - os: macos-15
+            architecture: arm64
+            artifact: macOS-arm64
+          - os: macos-15-intel
+            architecture: x64
+            artifact: macOS-x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: ${{ matrix.architecture }}
+      - run: python -m pip install -r packaging/requirements-build.txt
+      - run: python -B -m unittest discover -s tests -v
+      - run: python -B tools/build_manager.py
+      - name: Verify Windows binary and native WebView
+        if: runner.os == 'Windows'
+        run: python -B tools/smoke_manager.py dist/Biandengbao/Biandengbao-CLI.exe --gui-binary dist/Biandengbao/Biandengbao.exe
+      - name: Verify macOS binary
+        if: runner.os == 'macOS'
+        run: python -B tools/smoke_manager.py dist/Biandengbao.app/Contents/MacOS/Biandengbao
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Biandengbao-${{ matrix.artifact }}
+          path: release-dist/*
+          if-no-files-found: error
+          retention-days: 14

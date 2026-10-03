@@ -18,6 +18,8 @@ class QuickTunnel:
         self.ready = threading.Event()
         self.finished = threading.Event()
         self.failure = None
+        self.closed = threading.Event()
+        self.process_lock = threading.Lock()
 
     def start(self):
         if not self.executable.is_file():
@@ -28,10 +30,16 @@ class QuickTunnel:
         args = [str(self.executable), 'tunnel', '--config', str(config), '--no-autoupdate',
                 '--url', 'http://127.0.0.1:' + str(self.port), '--protocol', 'http2',
                 '--metrics', '127.0.0.1:0', '--grace-period', '2s']
-        self.process = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                        stderr=subprocess.STDOUT, text=True, encoding='utf-8', start_new_session=True)
+        with self.process_lock:
+            if self.closed.is_set():
+                raise RuntimeError("网关已停止；未启动外网隧道")
+            self.process = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                            stderr=subprocess.STDOUT, text=True, encoding='utf-8', start_new_session=True,
+                                            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         threading.Thread(target=self._read, daemon=True).start()
         for _ in range(60):
+            if self.closed.is_set():
+                raise RuntimeError("外网隧道已停止")
             if self.ready.wait(1):
                 return self.url
             if self.finished.is_set():
@@ -52,10 +60,18 @@ class QuickTunnel:
                     if 'Registered tunnel connection' in line and self.url:
                         (self.data_dir / '外网地址.txt').write_text(self.url + '\n\n账号和密码与局域网网关相同。重启隧道后地址会变化。\n', encoding='utf-8')
                         self.ready.set()
+                    elif 'Unregistered tunnel connection' in line:
+                        self.ready.clear()
         finally:
+            self.ready.clear()
             self.finished.set()
 
     def close(self):
+        self.closed.set()
+        with self.process_lock:
+            self._close_process()
+
+    def _close_process(self):
         if self.process and self.process.poll() is None:
             self.process.terminate()
             try:
