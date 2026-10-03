@@ -18,7 +18,7 @@ class SharedServiceTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve()
         self.source = self.root / "source"
         self.config = self.root / "data/config.json"
         self.source.mkdir()
@@ -85,6 +85,14 @@ class SharedServiceTests(unittest.TestCase):
         owner, _, folder = self.save_owner()
         with self.assertRaisesRegex(RuntimeError, "安装"):
             profile_from_settings(self.source, folder / "options.json")
+        self.assertEqual(profile_from_settings(owner, folder / "options.json").root, owner)
+
+    def test_equivalent_absolute_paths_are_not_foreign_owners(self):
+        owner, _, folder = self.save_owner()
+        options = read_json(folder / "options.json")
+        options["repository"] = str(owner) + "/../_internal"
+        options["config"] = str(self.config.parent) + "/../data/config.json"
+        write_json(folder / "options.json", options)
         self.assertEqual(profile_from_settings(owner, folder / "options.json").root, owner)
 
     def test_manager_options_keep_saved_owner_not_gui_installation(self):

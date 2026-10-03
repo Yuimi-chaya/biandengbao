@@ -55,6 +55,7 @@ class Profile:
             options = read_json(folder / "options.json")
             if (isinstance(options, dict) and options.get("schema") == 1 and not options.get("retired")
                     and isinstance(options.get("config"), str)
+                    and Path(options["config"]).is_absolute()
                     and same_config(options["config"], self.config)):
                 candidates.append((suffix, options))
         if len(candidates) > 1:
@@ -195,8 +196,12 @@ class Profile:
     def load_options(self):
         value = read_json(self.options)
         if (not isinstance(value, dict) or value.get("schema") != 1 or
-                value.get("repository") != str(self.root) or
-                value.get("config") != str(self.config) or
+                not isinstance(value.get("repository"), str) or
+                not Path(value["repository"]).is_absolute() or
+                not same_config(value["repository"], self.root) or
+                not isinstance(value.get("config"), str) or
+                not Path(value["config"]).is_absolute() or
+                not same_config(value["config"], self.config) or
                 type(value.get("port")) is not int or
                 not 1 <= value["port"] <= 65535 or
                 not isinstance(value.get("callerThread"), str) or
