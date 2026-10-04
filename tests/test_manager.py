@@ -232,6 +232,42 @@ class ManagerTests(unittest.TestCase):
         write_json(self.config.parent / "gateway-admin.json", {"pid": 10, "token": "b", "port": 80})
         self.assertIsNone(self.manager.gateway_record())
 
+    def test_read_status_recovers_when_gateway_is_replaced_during_rpc(self):
+        old = {"pid": 10, "token": "old", "port": 80}
+        new = {"pid": 20, "token": "new", "port": 81}
+        with patch.object(self.manager, "gateway_record", side_effect=[old, new, new, new]), \
+                patch.object(manager, "rpc", side_effect=[OSError("old gateway exited"), {"pid": 20}]) as call:
+            self.assertEqual(self.manager.read_gateway("status"), {"pid": 20})
+            self.assertEqual(call.call_count, 2)
+
+    def test_read_devices_discards_response_from_retired_gateway(self):
+        old = {"pid": 10, "token": "old", "port": 80}
+        new = {"pid": 20, "token": "new", "port": 81}
+        with patch.object(self.manager, "gateway_record", side_effect=[old, new, new, new]), \
+                patch.object(manager, "rpc", side_effect=[[{"id": "old"}], [{"id": "new"}]]) as call:
+            self.assertEqual(self.manager.gateway("devices"), [{"id": "new"}])
+            self.assertEqual(call.call_count, 2)
+
+    def test_gateway_mutations_are_never_replayed_after_restart(self):
+        with patch.object(self.manager, "gateway_record", return_value={"pid": 10, "token": "old", "port": 80}), \
+                patch.object(manager, "rpc", side_effect=OSError("connection lost")) as call:
+            with self.assertRaises(OSError):
+                self.manager.gateway("devices/revoke", {"id": "a" * 32})
+            call.assert_called_once()
+
+    def test_gateway_read_does_not_retry_unchanged_failure_or_keep_stale_success(self):
+        old = {"pid": 10, "token": "old", "port": 80}
+        with patch.object(self.manager, "gateway_record", return_value=old), \
+                patch.object(manager, "rpc", side_effect=OSError("unreachable")) as call:
+            with self.assertRaises(OSError):
+                self.manager.read_gateway("status")
+            call.assert_called_once()
+        with patch.object(self.manager, "gateway_record", side_effect=[old, None, None]), \
+                patch.object(manager, "rpc", return_value={"pid": 10}) as call:
+            with self.assertRaises(RuntimeError):
+                self.manager.read_gateway("status")
+            call.assert_called_once()
+
     def test_update_check_distinguishes_ahead_and_diverged_without_writes(self):
         self.manager.build["revision"] = "a" * 40
         for relation in ("ahead", "behind", "diverged", "identical"):

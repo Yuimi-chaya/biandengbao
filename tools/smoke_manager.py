@@ -4,6 +4,7 @@ import argparse
 import http.client
 import json
 import os
+import plistlib
 import socket
 import subprocess
 import sys
@@ -52,6 +53,10 @@ def main():
         try:
             status = cli("status")
             assert status["manager"]["revision"] != "development"
+            if sys.platform == "darwin":
+                info = plistlib.loads((binary.parent.parent / "Info.plist").read_bytes())
+                assert info["CFBundleShortVersionString"] == status["manager"]["version"]
+                assert info["CFBundleVersion"] == status["manager"]["version"]
             assert not status["configured"]
             cli("account", "--username", "smoke", "--password-stdin", "--yes", input="synthetic-password-123\n")
             with socket.socket() as sock:

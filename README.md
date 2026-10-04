@@ -66,7 +66,7 @@
 
 ### 桌面管理端
 
-下载 v0.2.0：[Windows x64](https://github.com/Yuimi-chaya/biandengbao/releases/download/v0.2.0/Biandengbao-0.2.0-Windows-x64.zip) · [Apple Silicon Mac](https://github.com/Yuimi-chaya/biandengbao/releases/download/v0.2.0/Biandengbao-0.2.0-macOS-arm64.zip) · [Intel Mac](https://github.com/Yuimi-chaya/biandengbao/releases/download/v0.2.0/Biandengbao-0.2.0-macOS-x64.zip)。完整目录解压使用，不需要另装 Python；[Release 页面](https://github.com/Yuimi-chaya/biandengbao/releases/tag/v0.2.0)提供 SHA-256 校验文件。
+下载 v0.2.1：[Windows x64](https://github.com/Yuimi-chaya/biandengbao/releases/download/v0.2.1/Biandengbao-0.2.1-Windows-x64.zip) · [Apple Silicon Mac](https://github.com/Yuimi-chaya/biandengbao/releases/download/v0.2.1/Biandengbao-0.2.1-macOS-arm64.zip) · [Intel Mac](https://github.com/Yuimi-chaya/biandengbao/releases/download/v0.2.1/Biandengbao-0.2.1-macOS-x64.zip)。完整目录解压使用，不需要另装 Python；[Release 页面](https://github.com/Yuimi-chaya/biandengbao/releases/tag/v0.2.1)提供 SHA-256 校验文件。
 
 管理端可查看 App/网关状态与版本、设置网关账号、解除设备登录、选择局域网/临时 HTTPS/已有域名，并按保存的连接模式启用登录自启动。支持深浅色，另有共用后端的 JSON CLI 和仅本机管理接口。
 

@@ -153,10 +153,29 @@ class Manager:
         return None
 
     def gateway(self, action, body=None):
+        if action in ("status", "devices"):
+            return self.read_gateway(action, timeout=4)
         record = self.gateway_record()
         if not record:
             raise RuntimeError("网关未启动或为旧版本；请使用新版启动后再管理登录设备")
         return rpc(record, action, body, timeout=4 if action == "status" else 15)
+
+    def read_gateway(self, action, timeout=1):
+        # Only reads can be repeated when an App restart replaces the gateway.
+        # Never replay account, revoke or other mutations after an uncertain RPC.
+        for attempt in range(2):
+            record = self.gateway_record()
+            if not record:
+                raise RuntimeError("网关管理接口正在等待启动")
+            try:
+                result = rpc(record, action, timeout=timeout)
+            except (OSError, RuntimeError, ValueError):
+                if attempt == 0 and self.gateway_record() not in (None, record):
+                    continue
+                raise
+            if self.gateway_record() == record:
+                return result
+        raise RuntimeError("网关正在重新连接，请稍后查看状态")
 
     def status(self):
         config = autostart.read_json(self.config) or {}
@@ -164,7 +183,7 @@ class Manager:
         record = self.gateway_record()
         if record:
             try:
-                gateway = rpc(record, "status", timeout=1)
+                gateway = self.read_gateway("status")
             except (OSError, RuntimeError, ValueError):
                 gateway["message"] = "网关管理接口暂不可达"
         elif read_record(self.config.parent / "gateway-control.json"):

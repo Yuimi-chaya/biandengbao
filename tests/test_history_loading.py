@@ -63,6 +63,38 @@ class PresentationTests(unittest.TestCase):
         self.assertEqual(len(merged[0]["items"]), 3)
         self.assertEqual(merged[0]["items"][-1]["text"], "native answer")
 
+    def test_native_older_turns_do_not_displace_active_tail_after_compaction(self):
+        live = LiveSession(THREAD)
+        live.saved_state = {**state(), "turns": [turn(index) for index in range(20, 33)]}
+        live.state = {**state(), "turns": [turn(index) for index in range(32)] + [turn(32, "inProgress")]}
+        live.connected = True
+        self.assertEqual([row["turnId"] for row in live.display_turns()], [str(index) for index in range(33)])
+        view = live.view()
+        self.assertEqual([row["id"] for row in view["turns"]], [str(index) for index in range(21, 33)])
+        self.assertEqual(view["turns"][-1]["status"], "inProgress")
+        self.assertEqual(view["turns"][-1]["historyIndex"], 32)
+        self.assertEqual(len(live.saved_state["turns"]), 13)
+        self.assertEqual(len(live.state["turns"]), 33)
+
+    def test_native_history_gaps_are_stitched_at_shared_anchors(self):
+        saved = {"turns": [turn(index) for index in (2, 5, 8)]}
+        native = {"turns": [turn(index) for index in (0, 1, 2, 3, 4, 5, 6, 7, 8, 9)]}
+        for prefer_native in (False, True):
+            result = merged_turns(saved, native, prefer_native=prefer_native)
+            self.assertEqual([row["turnId"] for row in result], [str(index) for index in range(10)])
+
+    def test_repeated_native_turn_id_keeps_latest_value_without_duplicate(self):
+        native = {"turns": [turn(0), turn(0, "inProgress"), turn(1)]}
+        result = merged_turns(None, native)
+        self.assertEqual([row["turnId"] for row in result], ["0", "1"])
+        self.assertEqual(result[0]["status"], "inProgress")
+
+    def test_import_anchor_preserves_order_when_saved_id_is_synthetic(self):
+        saved = {"turns": [{**turn(2), "turnId": "saved-2"}, turn(3)]}
+        native = {"turns": [turn(1), turn(2), turn(3), turn(4)]}
+        result = merged_turns(saved, native)
+        self.assertEqual([row["turnId"] for row in result], ["1", "2", "3", "4"])
+
     def test_offline_saved_priority_keeps_chronological_order(self):
         live = LiveSession(THREAD)
         live.saved_state = {**state(), "turns": [turn(index) for index in range(30)]}

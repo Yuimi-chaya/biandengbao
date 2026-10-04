@@ -1,11 +1,13 @@
 # Native-only builds: build macOS on macOS and Windows on Windows.
 import os
+import json
 import sys
 from pathlib import Path
 from PyInstaller.utils.hooks import copy_metadata, collect_data_files
 
 root = Path(SPECPATH).parent
 metadata = Path(os.environ["BDB_BUILD_METADATA"])
+version = json.loads(metadata.read_text(encoding="utf-8"))["version"]
 icon = os.environ["BDB_BUILD_ICON"]
 datas = [(str(root / "web"), "web"), (str(root / "manager-web"), "manager-web"),
          (str(root / "tools/configure-autostart.ps1"), "tools"),
@@ -37,6 +39,6 @@ else:
     coll = COLLECT(gui, a.binaries, a.datas, strip=False, upx=False, name="Biandengbao")
     app = BUNDLE(coll, name="Biandengbao.app", icon=icon, bundle_identifier="com.biandengbao.manager",
                  info_plist={"CFBundleName": "便蹬宝", "CFBundleDisplayName": "便蹬宝",
-                             "CFBundleShortVersionString": "0.2.0", "CFBundleVersion": "0.2.0",
+                             "CFBundleShortVersionString": version, "CFBundleVersion": version,
                              "NSHighResolutionCapable": True,
                              "NSAppTransportSecurity": {"NSAllowsLocalNetworking": True}})

@@ -124,7 +124,10 @@ def present_turn(turn, fold=True):
 def merged_turns(saved, native, prefer_native=True):
     result = list(ordered_turns(saved or {}))
     positions = {turn.get("turnId"): index for index, turn in enumerate(result) if turn.get("turnId")}
-    for turn in ordered_turns(native or {}):
+    native_turns = list({turn.get("turnId") or ("anonymous", index): turn
+                         for index, turn in enumerate(ordered_turns(native or {}))}.values())
+    additions = []
+    for turn in native_turns:
         key = turn.get("turnId")
         if key not in positions:
             opening = turn_opening(turn)
@@ -139,17 +142,31 @@ def merged_turns(saved, native, prefer_native=True):
                 continue
             native_items = turn.get("items", [])
             if isinstance(native_items, dict) and not native_items.get("isComplete", True):
-                native = items_array(native_items)
-                ids = {item.get("id") for item in native if item.get("id") is not None}
+                live_items = items_array(native_items)
+                ids = {item.get("id") for item in live_items if item.get("id") is not None}
                 missing = [item for item in items_array(saved_turn.get("items", []))
                            if item.get("id") not in ids]
-                turn = {**turn, "items": missing + native}
+                turn = {**turn, "items": missing + live_items}
             result[positions[key]] = turn
         else:
-            if key:
-                positions[key] = len(result)
-            result.append(turn)
-    return result
+            additions.append(turn)
+    # A rollout after compaction can start later than the desktop's history.
+    # Insert missing native turns BEFORE their next shared anchor, not at the
+    # tail, or old history displaces the active turn from the latest page.
+    buckets = {}
+    anchor = len(result)
+    missing = {id(turn) for turn in additions}
+    for turn in reversed(native_turns):
+        if id(turn) not in missing:
+            anchor = positions.get(turn.get("turnId"), anchor)
+        else:
+            buckets.setdefault(anchor, []).append(turn)
+    merged = []
+    for index in range(len(result) + 1):
+        merged.extend(reversed(buckets.get(index, [])))
+        if index < len(result):
+            merged.append(result[index])
+    return merged
 
 
 def turn_opening(turn):
