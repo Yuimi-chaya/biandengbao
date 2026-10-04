@@ -58,12 +58,18 @@ def process_image(pid):
 
 def process_started(pid):
     kernel = winapi()
+    kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel.WaitForSingleObject.restype = wintypes.DWORD
     kernel.GetProcessTimes.argtypes = [wintypes.HANDLE] + [
         ctypes.POINTER(wintypes.FILETIME)] * 4
-    handle = kernel.OpenProcess(0x1000, False, pid)
+    handle = kernel.OpenProcess(0x1000 | 0x100000, False, pid)
     if not handle:
         return None
     try:
+        # A parent can retain the process object after exit. Its creation time
+        # remains readable, so verify liveness before using it as an identity.
+        if kernel.WaitForSingleObject(handle, 0) != 0x102:
+            return None
         values = [wintypes.FILETIME() for _ in range(4)]
         if not kernel.GetProcessTimes(handle, *(ctypes.byref(v) for v in values)):
             return None

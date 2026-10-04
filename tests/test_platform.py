@@ -78,6 +78,32 @@ class TransportTests(unittest.TestCase):
 
 
 class PlatformDataTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == 'nt', 'Windows process object lifetime')
+    def test_exited_child_with_retained_parent_handle_is_not_alive(self):
+        from bridge import windows_app
+        from bridge.manager import Manager
+        from bridge.autostart import write_json
+        child = subprocess.Popen([sys.executable, '-c', 'import sys; sys.stdin.buffer.read(1)'],
+                                 stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
+        try:
+            started = windows_app.process_started(child.pid)
+            self.assertIsNotNone(started)
+            child.communicate(b'x', timeout=5)
+            self.assertEqual(child.returncode, 0)
+            # Popen deliberately retains its process handle until cleanup.
+            self.assertIsNone(windows_app.process_started(child.pid))
+            with tempfile.TemporaryDirectory(dir=ROOT / '.tmp') as folder:
+                manager = Manager(ROOT, Path(folder) / 'config.json')
+                manager.child = child
+                write_json(manager.profile.control / 'status.json', {
+                    'supervisorPid': child.pid, 'supervisorStarted': started})
+                self.assertFalse(manager.worker_alive())
+                manager.pause_worker()
+        finally:
+            if child.poll() is None:
+                child.communicate(b'x', timeout=5)
+
     @unittest.skipUnless(os.name == 'nt', 'Windows extended paths')
     def test_extended_rollout_paths_read_history_and_usage(self):
         import sqlite3
