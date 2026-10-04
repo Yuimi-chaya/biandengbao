@@ -408,7 +408,8 @@ function renderTurn(turn,previous,options={}){
   const deferWork=process&&!options.keepProcess&&!previous?.querySelector('.turn-process')?.open;
   const visibleMessages=turn.messages.flatMap((message,index)=>message.kind!=='contextCompaction'||!options.compactions
     ?[message]:options.compactions.has(index)?[{...message,compactionCount:options.compactions.get(index)}]:[]);
-  const messages=deferWork?visibleMessages.filter(message=>message.role==='user'||message===final||message.kind==='contextCompaction'):visibleMessages;
+  const dedupedMessages=ThreadUI.dedupeMessages(visibleMessages);
+  const messages=deferWork?dedupedMessages.filter(message=>message.role==='user'||message===final||message.kind==='contextCompaction'):dedupedMessages;
   for(const [index,message] of messages.entries()){
     if(message.role==='activity'){activities.push({...message,index});continue;}
     flush();

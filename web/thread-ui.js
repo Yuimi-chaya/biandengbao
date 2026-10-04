@@ -26,6 +26,28 @@ const ThreadUI = (() => {
     return Boolean(view.compactionPending || view.connected && view.status === 'active' && latest?.status === 'inProgress'
       && latest.messages?.some(message => message.kind === 'contextCompaction' && message.status === 'inProgress'));
   }
+  function messageFingerprint(message) {
+    if (message?.role === 'user') {
+      const attachments = (message.attachments || []).map(item =>
+        [item?.name, item?.path, item?.type].map(value => String(value ?? '')).join('|')).join(',');
+      return 'user|' + String(message.text ?? '') + '|' + attachments;
+    }
+    if (message?.role === 'error') {
+      return 'error|' + String(message.text ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
+    }
+    return '';
+  }
+  function dedupeMessages(messages) {
+    const result = [];
+    let previous = '';
+    for (const message of messages || []) {
+      const fingerprint = messageFingerprint(message);
+      if (fingerprint && fingerprint === previous) continue;
+      result.push(message);
+      previous = fingerprint;
+    }
+    return result;
+  }
   function compactionRecords(view) {
     const visible = new Map();
     const pending = isCompacting(view);
@@ -41,6 +63,10 @@ const ThreadUI = (() => {
     for (const turn of view.turns || []) {
       for (const [index, message] of (turn.messages || []).entries()) {
         if (message.kind === 'contextCompaction') run.push({ turn: turn.id, index, active: message.status === 'inProgress' });
+        // An upstream disconnect/retry is emitted as an error item between
+        // compaction markers. It is part of the same operation, not a new
+        // compaction record.
+        else if (run.length && message.role === 'error') continue;
         else if (message.role === 'activity' || message.text?.trim() || message.attachments?.length) flush();
       }
     }
@@ -201,6 +227,6 @@ const ThreadUI = (() => {
   function inputMaxHeight(shellHeight, chromeHeight) {
     return Math.max(40, Math.min(150, shellHeight * .20, shellHeight - chromeHeight - 72));
   }
-  return { reasoningParts, durationText, completedText, isCompacting, compactionRecords, finalMessage, completedTurn, revealStep,
+  return { reasoningParts, durationText, completedText, isCompacting, messageFingerprint, dedupeMessages, compactionRecords, finalMessage, completedTurn, revealStep,
     settledPrefix, activityPresentation, activityIcon, filePresentation, diffLineKind, inputMaxHeight, toolResult };
 })();

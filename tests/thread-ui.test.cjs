@@ -27,6 +27,13 @@ assert.equal(ui.compactionRecords({turns:[{id:'empty',status:'completed',message
 assert.equal(ui.compactionRecords({turns:[{id:'a',messages:[compact,{role:'user',text:'Next'},compact]}]}).get('a').size,2);
 assert.equal(ui.isCompacting({connected:false,status:'notLoaded',turns:[{status:'inProgress',messages:[{kind:'contextCompaction'}]}]}), false);
 assert.equal(ui.isCompacting({turns:[{status:'completed',messages:[{kind:'contextCompaction'}]}]}), false);
+const duplicateUser={role:'user',text:'same prompt'};
+assert.equal(ui.dedupeMessages([duplicateUser,{...duplicateUser,id:'native'},{role:'assistant',text:'reply'}]).length,2);
+assert.equal(ui.dedupeMessages([duplicateUser,{role:'assistant',text:'reply'},duplicateUser]).length,3);
+assert.equal(ui.compactionRecords({turns:[{id:'retry',messages:[
+  {kind:'contextCompaction',role:'activity',status:'completed'},
+  {role:'error',text:'上游 API 断开，正在重试'},
+  {kind:'contextCompaction',role:'activity',status:'completed'}]}]}).get('retry').get(2),2);
 const final={role:'assistant',phase:'final_answer',text:'Result'};
 assert.equal(ui.finalMessage({messages:[final,{role:'assistant',phase:'commentary',text:'Update'}]}), final);
 assert.equal(ui.completedTurn({id:'old',status:'inProgress'},{turns:[{id:'old'},{id:'new'}]}), true);

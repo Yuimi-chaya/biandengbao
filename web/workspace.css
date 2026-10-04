@@ -92,6 +92,11 @@ button, summary, a { touch-action: manipulation; }
 .activity-group { margin: 5px 0; }
 .activity-group > .activity-heading { border-bottom: 1px solid var(--line); }
 .activity-body { padding: 5px 0; }
+.turn-process-content > .turn { margin: 0; }
+.turn-process-content .activity-group { margin: 2px 0; }
+.turn-process-content .activity-heading, .turn-process-content .activity > summary { min-height: 28px; padding-top: 3px; padding-bottom: 3px; }
+.turn-process-content .activity-body { padding: 2px 0; }
+.turn-process-content .activity-group .activity { margin: 3px 0; }
 .activity-body:focus-visible, .collapse-detail:focus-visible { outline: 2px solid #779584; outline-offset: 2px; }
 .activity-group .activity { border: 1px solid #dedede; border-radius: 6px; margin: 8px 0; overflow: hidden; }
 .activity > summary { padding: 8px 10px; background: #fafafa; }

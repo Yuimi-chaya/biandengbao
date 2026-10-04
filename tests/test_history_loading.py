@@ -95,6 +95,24 @@ class PresentationTests(unittest.TestCase):
         raw["items"].insert(1, {"id": "err", "type": "error", "message": "failure"})
         self.assertTrue(any(row["role"] == "error" for row in present_turn(raw)["messages"]))
 
+    def test_adjacent_snapshot_duplicates_are_hidden_but_later_repeats_remain(self):
+        raw = turn(1)
+        user = raw["items"][0]
+        duplicate = {**user, "id": "native-user"}
+        raw["items"] = [user, duplicate, raw["items"][-1]]
+        rows = present_turn(raw)["messages"]
+        self.assertEqual([row["role"] for row in rows], ["user", "assistant"])
+        raw["items"].append({**user, "id": "later-user"})
+        rows = present_turn(raw)["messages"]
+        self.assertEqual(sum(row["role"] == "user" for row in rows), 2)
+
+    def test_adjacent_disconnect_errors_are_hidden(self):
+        raw = turn(1)
+        raw["items"].insert(1, {"id": "err-a", "type": "error", "message": "上游 API 断开，正在重试"})
+        raw["items"].insert(2, {"id": "err-b", "type": "error", "message": "上游   API 断开，正在重试"})
+        rows = present_turn(raw)["messages"]
+        self.assertEqual(sum(row["role"] == "error" for row in rows), 1)
+
     def test_exact_detail_version_changes_for_same_length_middle_edit(self):
         raw = turn(1, "inProgress")
         original = present_turn(raw)["messages"][1]["detailVersion"]

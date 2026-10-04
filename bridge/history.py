@@ -96,6 +96,25 @@ def present_turn(turn, fold=True):
         if row.get("id") in duplicate_ids:
             row["id"] = row["detailKey"]
         messages.append(row)
+    # Native and saved snapshots can briefly expose the same user/error item
+    # with different IDs while a turn is being reconciled. Keep the timeline
+    # stable without hiding intentionally repeated prompts in later turns.
+    deduped = []
+    previous = None
+    for row in messages:
+        role = row.get("role")
+        fingerprint = None
+        if role == "user":
+            fingerprint = ("user", row.get("text", ""), tuple(
+                (item.get("name"), item.get("path"), item.get("type"))
+                for item in row.get("attachments", []) if isinstance(item, dict)))
+        elif role == "error":
+            fingerprint = ("error", " ".join(str(row.get("text", "")).split()).casefold())
+        if fingerprint is not None and fingerprint == previous:
+            continue
+        deduped.append(row)
+        previous = fingerprint
+    messages = deduped
     # Native opening prompts can live in turn.params rather than in its items.
     value["messages"] = messages if any(row.get("role") == "user" for row in messages) else value["messages"] + messages
     value["processAvailable"] = process
